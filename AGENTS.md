@@ -40,7 +40,11 @@ Ein Lernspiel als **eine einzige Datei `index.html`** im Stil klassischer 8-Bit-
 | Burg | – | Boss: gemischt mit Verfahrenswahl |
 
 - Den Durchgang zum nächsten Gebiet blockiert ein Hindernis, das erst verschwindet, wenn alle Monster des Gebiets besiegt sind.
-- **Herzen:** Start mit 5. Gelegentlich lassen besiegte Monster ein Herz fallen. Bei 0 Herzen: freundlicher Game-over-Bildschirm, dann Neustart am Anfang des aktuellen Gebiets (kein Neustart des ganzen Spiels).
+- **Herzen:** Anzahl je Niveau: **leicht 3, standard 3, plus 2** (Funktion `maxHerzen()`).
+  - Jede falsche Antwort kostet ein Herz.
+  - Nach jedem gewonnenen Kampf werden die Herzen **wieder vollständig aufgefüllt**.
+  - Besiegte Monster lassen mit **30 % Wahrscheinlichkeit** ein Herz fallen. Einsammeln gibt ein Herz zurück (höchstens bis zum Maximum, sonst Meldung „Deine Herzen sind voll.“).
+  - Bei 0 Herzen: freundlicher Game-over-Bildschirm, dann Neustart am Anfang des aktuellen Gebiets (kein Neustart des ganzen Spiels).
 - **Monster:** 1 Treffer, also 1 richtig gelöste Aufgabe. Der Boss hat 4 Phasen.
 - **Gegenstände als Werkzeuge im Kampf:** Ab dem Fund ist jeder Gegenstand **einmal pro Aufgabe** einsetzbar (neue Aufgabe oder neue Bossphase lädt ihn wieder auf), ohne Herzverlust oder sonstigen Nachteil.
   - **Fernrohr:** zeigt eine Skizze beider Geraden im Koordinatensystem (auch senkrechte Geraden `x = c`).

@@ -128,7 +128,7 @@ const SCHWARZ = 0, WEISS = 1, HELLGRAU = 2, GRAU = 3, DUNKELGRAU = 4,
       SANDMITTE = 29, MONDBLAU = 30, GOLDMITTE = 31;
 
 /* Niveaus (LehrplanPLUS M9): auf dem Titelbildschirm wählbar.
-   In Etappe 1 wird die Wahl nur gespeichert, sie wirkt noch nicht. */
+   Das Niveau steuert Aufgaben, Hilfen, Werkzeuge und Herzen (9.3). */
 const NIVEAUS = ['leicht', 'standard', 'plus'];
 
 /* Herzen je Niveau: leicht 3, standard 3, plus 2.
@@ -1235,7 +1235,7 @@ anpassen();
    Jedes Zeichen: 8 Zeilen à 8 Bit, als 16 Hex-Zeichen.
    Höchstes Bit einer Zeile = linke Spalte.
    Enthält ä ö ü ß, −, |, ∧, { }, ( ) und Komma sowie die
-   Zeichen für die Mathematik der späteren Etappen. */
+   Zeichen für die Mathematik im Kampf. */
 const SCHRIFT = {
   'A': '3844447C44444400', 'B': '7844447844447800', 'C': '3C40404040403C00',
   'D': '7844444444447800', 'E': '7C40407840407C00', 'F': '7C40407840404000',
@@ -1512,7 +1512,7 @@ const ICONS = {
   ])
 };
 /* Herzen in drei Tönen: volles Herz mit Glanzpunkt,
-   leeres Herz mit Innenschatten (Etappe „Modern Retro“). */
+   leeres Herz mit Innenschatten. */
 const HERZ_FORM = [
   '.75..56.', '7s555556', '55555556', '.555556.',
   '..5556..', '...56...', '....6...', '........'
@@ -2690,8 +2690,8 @@ function wegWeiter() {
   neueAufgabe(KAMPF.sfTyp);
 }
 
-/* Sieg: Monster verliert ein Leben, ggf. Herz fallen lassen,
-   Gebiet prüfen (aus Etappe 1). */
+/* Sieg: Monster verliert ein Leben, ggf. Herz fallen lassen (30 %),
+   Gebiet prüfen, Herzen wieder auffüllen. */
 function kampfGewonnen() {
   const m = KAMPF.monster, gi = KAMPF.gebietIndex;
   const z = GEBIET_ZUSTAND[gi], gb = GEBIETE[gi];
@@ -3712,7 +3712,7 @@ function tickWelt() {
     if (platzFrei(SPIELER.bildschirm, SPIELER.x, SPIELER.y + dy * t)) SPIELER.y += dy * t;
     SPIELER.laufTimer++;
     SPIELER.schritt = (SPIELER.laufTimer >> 3) & 1;
-    /* Leise Schritte (Etappe 3, Web Audio) */
+    /* Leise Schritte (Web Audio) */
     if (++SPIELER.schrittTimer >= 14) { SPIELER.schrittTimer = 0; effekt('schritt'); }
     if (dx > 0) SPIELER.blick = 'rechts';
     else if (dx < 0) SPIELER.blick = 'links';
@@ -3950,7 +3950,7 @@ function zeichneHUD(g) {
   g.fillStyle = PALETTE[DUNKELGRAU];
   g.fillRect(167, 27, 82, 1); g.fillRect(167, 37, 82, 1);
   g.fillRect(167, 27, 1, 11); g.fillRect(248, 27, 1, 11);
-  /* Ton-Symbol: an/aus per M-Taste oder antippen (Etappe 3) */
+  /* Ton-Symbol: an/aus per M-Taste oder antippen */
   g.drawImage(AUDIO.an ? TON_AN : TON_AUS, 200, 4);
   /* Meldung, bei Bedarf zwei Zeilen */
   if (SPIEL.meldungen.length > 0) {
@@ -4363,7 +4363,7 @@ requestAnimationFrame(schleife);
    Prüft: die Referenzaufgaben aus 9.4 mit dem Loeser, je Verfahren
    und Niveau 200 generierte Aufgaben gegen den Loeser (inkl.
    Koeffizientenbereich und trivialer Gleichungen), den
-   Eingabe-Parser sowie Karten, Spawns und Schrift aus Etappe 1. */
+   Eingabe-Parser sowie Karten, Spawns und Schrift. */
 
 /* Prüfung einer generierten Aufgabe (Abschnitt 12): Der Loeser
    muss die vom Generator beabsichtigte Lösung liefern, alle
