@@ -1,0 +1,4706 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Mira und die Kreuzungen</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden;
+    -webkit-user-select: none; user-select: none; touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #spielfeld {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    image-rendering: pixelated; image-rendering: crisp-edges;
+    touch-action: none; background: #000;
+  }
+  /* Touch-Steuerung: wird per JavaScript nur auf Touch-Geräten eingeblendet */
+  #touch { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+  .tknopf {
+    position: absolute; pointer-events: auto; box-sizing: border-box;
+    width: 54px; height: 54px;
+    background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.35);
+    border-radius: 12px; color: rgba(255,255,255,0.8);
+    display: flex; align-items: center; justify-content: center;
+    font: 22px/1 sans-serif; touch-action: none;
+  }
+  #t-hoch   { left: 74px;  bottom: 140px; }
+  #t-runter { left: 74px;  bottom: 20px;  }
+  #t-links  { left: 16px;  bottom: 80px;  }
+  #t-rechts { left: 132px; bottom: 80px;  }
+  #t-a {
+    right: 24px; bottom: 56px; width: 64px; height: 64px;
+    border-radius: 50%; font-size: 26px;
+  }
+</style>
+</head>
+<body>
+<canvas id="spielfeld" width="256" height="240"></canvas>
+<div id="touch" style="display:none">
+  <div class="tknopf" id="t-hoch">&#9650;</div>
+  <div class="tknopf" id="t-runter">&#9660;</div>
+  <div class="tknopf" id="t-links">&#9664;</div>
+  <div class="tknopf" id="t-rechts">&#9654;</div>
+  <div class="tknopf" id="t-a">A</div>
+</div>
+<script>
+'use strict';
+
+/* ============================================================
+   MIRA UND DIE KREUZUNGEN – Lernspiel zu linearen Gleichungssystemen
+   ------------------------------------------------------------
+   Eine Datei, Vanilla JS, keine externen Ressourcen.
+   Aufbau nach AGENTS.md Abschnitt 10:
+     1. CONFIG      8. Welt
+     2. Bruch        9. Figuren
+     3. Gleichung   10. Kampf
+     4. Generator   11. Audio
+     5. Loeser      12. Spiel
+     6. Eingabe     13. Selbsttest
+     7. Grafik
+   ============================================================ */
+
+/* ============================================================
+   1. CONFIG – Konstanten, Palette, Niveaus
+   ============================================================ */
+
+const CONFIG = {
+  BREITE: 256,            // interne Auflösung (NES)
+  HOEHE: 240,
+  HUD_HOEHE: 64,          // HUD-Streifen oben
+  KACHEL: 16,             // Kachelgröße in Pixeln
+  FELD_BREITE: 16,        // Spielfeld in Kacheln: 16 x 11
+  FELD_HOEHE: 11,
+  SPIELER_TEMPO: 1.5,     // Pixel pro Frame (bei 60 Bildern/s)
+  MONSTER_TEMPO: 0.55,
+  JAGD_TEMPO: 0.75,       // Tempo verfolgender Monster
+  WECHSEL_DAUER: 30,      // Frames pro Bildschirmwechsel
+  FRAME_MS: 1000 / 60
+};
+
+/* Begrenzte Palette im NES-Stil, „Modern Retro“ überarbeitet (32 Farben):
+   wärmere Schatten (Violett-/Braunstich statt reinem Schwarz), kühlere
+   Lichter und mehr Farbtiefe für Dithering-Verläufe.
+   Indizes 0-24 behalten ihre Farbnamen (Sprite-Zeichen '0'-'9' und 'a'-'o'),
+   neu sind 25-31 (Sprite-Zeichen 'p'-'v'). */
+const PALETTE = [
+  '#1a1424', // 0  Schwarz       – warme Tiefe statt reinem Schwarz
+  '#eef0f2', // 1  Weiß          – kühles Lichtweiß
+  '#a9b4c6', // 2  Hellgrau      – kühles Lichtgrau
+  '#6b7186', // 3  Grau          – mittleres Grau mit kühlem Stich
+  '#3c3450', // 4  Dunkelgrau    – warmviolette Schattenfläche
+  '#d9434c', // 5  Rot           – Kleid, Herzen, Teppich
+  '#7e1f34', // 6  Dunkelrot     – warmes Schattenrot
+  '#ff8a70', // 7  Hellrot       – helles Korallenrot
+  '#f49040', // 8  Orange        – warmes Orange
+  '#ffd45e', // 9  Gelb          – sattes Lichtgelb
+  '#e0b269', // 10 Sand          – warmer Wegesand, Schlamm
+  '#8edb64', // 11 Hellgrün      – kühles Lichtgrün
+  '#38a158', // 12 Grün          – sattes Wiesengrün
+  '#20713a', // 13 Dunkelgrün    – Grünton für Schatten
+  '#c8ecab', // 14 Blassgrün     – helles Blattgrün
+  '#6cc9ea', // 15 Hellblau      – kühles Eisblau
+  '#3f8ed2', // 16 Blau          – sattes Wasserblau
+  '#1d4e78', // 17 Dunkelblau    – tiefes Schattenblau
+  '#f3c79b', // 18 Haut          – warmer Hautton
+  '#a05c2e', // 19 Braun         – mittleres warmes Braun
+  '#57301f', // 20 Dunkelbraun   – tiefes Holzbraun (Haare, Stämme)
+  '#f88bb4', // 21 Rosa          – Blütenrosa
+  '#ffc4d2', // 22 Hellrosa      – helles Blütenrosa
+  '#8a5fd1', // 23 Violett       – Zauberviolett
+  '#4d2c8c', // 24 Dunkelviolett – tiefes Zauberviolett
+  '#d2955f', // 25 HautSchatten  – Schatten der Haut, Holz-Mittleton (NEU)
+  '#2c8a49', // 26 GrünMitte     – Mittleres Grün für Verläufe (NEU)
+  '#241e33', // 27 Nacht         – tiefster warmer Schatten (NEU)
+  '#fff6cf', // 28 Glanz         – Glanzpunkte, Funken, Schimmer (NEU)
+  '#a8794a', // 29 SandMitte     – Mittlerer Sandton für Dithering (NEU)
+  '#2c3a5e', // 30 MondBlau      – kühles Nachtblau, Titelhimmel (NEU)
+  '#c98b2e'  // 31 GoldMitte     – dunkleres Gelb für Verläufe (NEU)
+];
+
+const SCHWARZ = 0, WEISS = 1, HELLGRAU = 2, GRAU = 3, DUNKELGRAU = 4,
+      ROT = 5, DUNKELROT = 6, HELLROT = 7, ORANGE = 8, GELB = 9,
+      SAND = 10, HELLGRUEN = 11, GRUEN = 12, DUNKELGRUEN = 13, BlassGRUEN = 14,
+      HELLBLAU = 15, BLAU = 16, DUNKELBLAU = 17, HAUT = 18, BRAUN = 19,
+      DUNKELBRAUN = 20, ROSA = 21, HELLROSA = 22, VIOLETT = 23, DUNKELVIOLETT = 24,
+      HAUTSCHATTEN = 25, GRUENMITTE = 26, NACHT = 27, GLANZ = 28,
+      SANDMITTE = 29, MONDBLAU = 30, GOLDMITTE = 31;
+
+/* Niveaus (LehrplanPLUS M9): auf dem Titelbildschirm wählbar.
+   In Etappe 1 wird die Wahl nur gespeichert, sie wirkt noch nicht. */
+const NIVEAUS = ['leicht', 'standard', 'plus'];
+
+/* Herzen je Niveau: leicht 3, standard 3, plus 2.
+   Nach jedem gewonnenen Kampf laden sie sich wieder auf. */
+function maxHerzen() {
+  return NIVEAUS[SPIEL.niveauIndex] === 'plus' ? 2 : 3;
+}
+
+const IST_TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+/* ============================================================
+   2. Bruch – exakte Bruchrechnung (Abschnitt 10.2)
+   ------------------------------------------------------------
+   Alle Mathematik läuft über Bruch, nie über Gleitkommazahlen.
+   Das Vorzeichen steckt im Zähler, der Nenner ist immer > 0,
+   jeder Bruch ist vollständig gekürzt.
+   ============================================================ */
+
+function ggT(a, b) {
+  a = Math.abs(a); b = Math.abs(b);
+  while (b) { const r = a % b; a = b; b = r; }
+  return a;
+}
+
+/* Zähler für Divisionen durch 0: darf nie steigen, der Selbsttest prüft das. */
+let BRUCH_NULLNENNER = 0;
+
+class Bruch {
+  constructor(zaehler, nenner) {
+    if (nenner === undefined) nenner = 1;
+    if (nenner === 0) { BRUCH_NULLNENNER++; zaehler = 0; nenner = 1; }   /* defensiv, darf nicht vorkommen */
+    if (nenner < 0) { zaehler = -zaehler; nenner = -nenner; }
+    const g = ggT(zaehler, nenner) || 1;
+    this.z = zaehler / g;
+    this.n = nenner / g;
+  }
+  istNull() { return this.z === 0; }
+  istGanz() { return this.n === 1; }
+  istEins() { return this.z === 1 && this.n === 1; }
+  istMinusEins() { return this.z === -1 && this.n === 1; }
+  istNegativ() { return this.z < 0; }
+  betrag() { return new Bruch(Math.abs(this.z), this.n); }
+  neg() { return new Bruch(-this.z, this.n); }
+  gleich(a) { return this.z === a.z && this.n === a.n; }
+  zahl() { return this.z / this.n; }   /* nur zum Zeichnen der Geraden! */
+}
+const bGanz = function (z) { return new Bruch(z, 1); };
+const bNeg = function (a) { return new Bruch(-a.z, a.n); };
+const bAdd = function (a, b) { return new Bruch(a.z * b.n + b.z * a.n, a.n * b.n); };
+const bSub = function (a, b) { return new Bruch(a.z * b.n - b.z * a.n, a.n * b.n); };
+const bMul = function (a, b) { return new Bruch(a.z * b.z, a.n * b.n); };
+const bDiv = function (a, b) { return new Bruch(a.z * b.n, a.n * b.z); };
+function bGleich(a, b) { return a.z === b.z && a.n === b.n; }
+
+/* Exakte Dezimaldarstellung mit Komma, falls der Bruch endlich
+   ist (Nenner nur aus 2ern und 5ern), sonst null. */
+function bDezimal(a) {
+  let n = a.n, zweier = 0, fuenfer = 0;
+  while (n % 2 === 0) { n /= 2; zweier++; }
+  while (n % 5 === 0) { n /= 5; fuenfer++; }
+  if (n !== 1) return null;
+  const k = Math.max(zweier, fuenfer);
+  const ziffern = Math.abs(a.z) * Math.pow(10, k) / a.n;
+  let s = String(ziffern);
+  while (s.length <= k) s = '0' + s;
+  let erg = k > 0 ? s.substr(0, s.length - k) + ',' + s.substr(s.length - k) : s;
+  if (k > 0) erg = erg.replace(/0+$/, '').replace(/,$/, '');
+  return (a.istNegativ() ? '−' : '') + erg;
+}
+
+/* Anzeige: Dezimalzahl mit Komma wenn möglich, sonst Bruch
+   (Abschnitt 8: echtes Minus, Abschnitt 9.3: 0,75 oder 1/3). */
+function bAnzeigen(a) {
+  if (a.n === 1) return (a.istNegativ() ? '−' : '') + Math.abs(a.z);
+  const d = bDezimal(a);
+  if (d !== null) return d;
+  return (a.istNegativ() ? '−' : '') + Math.abs(a.z) + '/' + a.n;
+}
+
+/* ============================================================
+   3. Gleichung / System – Darstellung und Formatierung
+   ------------------------------------------------------------
+   Eine Gleichung speichert ihre Normalform a·x + b·y = c mit
+   exakten Brüchen plus eine Anzeigeform (Abschnitt 8/9.3):
+     normal   – Normalform (Termreihenfolge x/y beliebig)
+     aufg     – nach einer Variablen aufgelöst (y = ... / x = ...)
+     gemischt – Terme auf beiden Seiten (Niveau standard)
+     klammer  – Klammerterm wie 3(2x − 4) + 6y = 0 (Niveau plus)
+     binomX   – (px + q)² = p²x² + sy + t (plus, binomische Formel)
+     binomY   – (y + q)² + ux = y · y + v (plus, binomische Formel)
+   ============================================================ */
+
+function glNormalform(a, b, c, form) {
+  return { a: a, b: b, c: c, form: form || { typ: 'normal', ordnung: 'xy' } };
+}
+
+/* Eine Seite als Termfolge. Koeffizient 1 wird nicht angezeigt
+   (x statt 1x), '+ −3' wird zu '− 3', Terme mit 0 entfallen,
+   echtes Minus, implizite Multiplikation wie 2x (Abschnitt 8). */
+function seiteAnzeigen(terme) {
+  let s = '';
+  for (let i = 0; i < terme.length; i++) {
+    const t = terme[i];
+    if (t.k.istNull()) continue;
+    const minus = t.k.istNegativ();
+    const betrag = t.k.betrag();
+    let stueck;
+    if (t.v === null) stueck = bAnzeigen(betrag);
+    else if (betrag.istEins()) stueck = t.v;
+    else {
+      const anzeige = bAnzeigen(betrag);
+      /* Bruch-Koeffizienten mit Malpunkt (1/3 · x), Dezimalzahlen
+         und ganze Zahlen implizit (2x, 0,5x) – Abschnitt 8 */
+      stueck = anzeige.indexOf('/') >= 0 ? anzeige + ' · ' + t.v : anzeige + t.v;
+    }
+    if (s === '') s = (minus ? '−' : '') + stueck;
+    else s += (minus ? ' − ' : ' + ') + stueck;
+  }
+  return s === '' ? '0' : s;
+}
+
+function normalformAnzeige(g) {
+  const tx = { k: g.a, v: 'x' }, ty = { k: g.b, v: 'y' };
+  const links = (g.form.typ === 'normal' && g.form.ordnung === 'yx') ? [ty, tx] : [tx, ty];
+  return seiteAnzeigen(links) + ' = ' + seiteAnzeigen([{ k: g.c, v: null }]);
+}
+
+/* Aufgelöste Form: vari = m · (andere Variable) + b */
+function aufgeloestNach(g, vari) {
+  if (vari === 'y') return { m: bNeg(bDiv(g.a, g.b)), b: bDiv(g.c, g.b) };
+  return { m: bNeg(bDiv(g.b, g.a)), b: bDiv(g.c, g.a) };
+}
+function aufgeloestAnzeige(vari, m, b0, reihenfolge) {
+  const t1 = { k: m, v: vari === 'y' ? 'x' : 'y' };
+  const t2 = { k: b0, v: null };
+  const rechts = reihenfolge === 'bx' ? seiteAnzeigen([t2, t1]) : seiteAnzeigen([t1, t2]);
+  return vari + ' = ' + rechts;
+}
+
+/* Klammerform u(a·V + d) + e·W = f ; f ergibt sich aus der Normalform */
+function klammerRechts(g) {
+  return bAnzeigen(bAdd(g.c, bGanz(g.form.u * g.form.d)));
+}
+
+function glAnzeige(g) {
+  const f = g.form;
+  if (f.typ === 'normal') return normalformAnzeige(g);
+  if (f.typ === 'aufg') {
+    const a = aufgeloestNach(g, f.vari);
+    return aufgeloestAnzeige(f.vari, a.m, a.b, f.reihenfolge);
+  }
+  if (f.typ === 'gemischt') {
+    /* f.x/f.y/f.c: Seite ('L'/'R') jedes Terms, f.ordnung: 'xy'/'yx'.
+       Auf jeder Seite zuerst die Variablenterme, dann die Konstante. */
+    const lv = [], rv = [];
+    const tx = { k: f.x === 'L' ? g.a : bNeg(g.a), v: 'x' };
+    const ty = { k: f.y === 'L' ? g.b : bNeg(g.b), v: 'y' };
+    const tc = { k: f.c === 'L' ? bNeg(g.c) : g.c, v: null };
+    (f.x === 'L' ? lv : rv).push(tx);
+    (f.y === 'L' ? lv : rv).push(ty);
+    if (f.ordnung === 'yx') lv.reverse();
+    const links = lv.slice(), rechts = rv.slice();
+    if (f.c === 'L') links.push(tc); else rechts.push(tc);
+    return seiteAnzeigen(links) + ' = ' + seiteAnzeigen(rechts);
+  }
+  if (f.typ === 'klammer') {
+    let s = String(f.u) + '('
+      + seiteAnzeigen([{ k: bGanz(f.a), v: f.innen }, { k: bGanz(f.d), v: null }]) + ')';
+    const anderes = f.innen === 'x' ? 'y' : 'x';
+    if (f.e !== 0) {
+      s += (f.e < 0 ? ' − ' : ' + ') + (Math.abs(f.e) === 1 ? '' : String(Math.abs(f.e))) + anderes;
+    }
+    return s + ' = ' + klammerRechts(g);
+  }
+  if (f.typ === 'binomX') {
+    const links = '(' + seiteAnzeigen([{ k: bGanz(f.p), v: 'x' }, { k: bGanz(f.q), v: null }]) + ')²';
+    const rechts = seiteAnzeigen([
+      { k: bGanz(f.p * f.p), v: 'x²' },
+      { k: bGanz(f.s), v: 'y' },
+      { k: bGanz(f.t), v: null }
+    ]);
+    return links + ' = ' + rechts;
+  }
+  if (f.typ === 'binomY') {
+    let links = '(' + seiteAnzeigen([{ k: bGanz(1), v: 'y' }, { k: bGanz(f.q), v: null }]) + ')²';
+    if (f.u !== 0) {
+      links += (f.u < 0 ? ' − ' : ' + ') + (Math.abs(f.u) === 1 ? '' : String(Math.abs(f.u))) + 'x';
+    }
+    const rechts = seiteAnzeigen([{ k: bGanz(1), v: 'y · y' }, { k: bGanz(f.v), v: null }]);
+    return links + ' = ' + rechts;
+  }
+  return normalformAnzeige(g);
+}
+
+/* Gerade aus einer Gleichung (Sonderfälle, grafisches Lösen) */
+function geradeAus(g) {
+  if (!g.b.istNull()) return { vertikal: false, m: bNeg(bDiv(g.a, g.b)), b: bDiv(g.c, g.b) };
+  return { vertikal: true, x: bDiv(g.c, g.a), m: bGanz(0), b: bGanz(0) };
+}
+function geradeAnzeige(gr) {
+  if (gr.vertikal) return 'x = ' + bAnzeigen(gr.x);
+  return aufgeloestAnzeige('y', gr.m, gr.b, 'xb');
+}
+
+/* System lösen – unabhängig vom Generator (Abschnitt 10.5).
+   Ergebnis: { typ: 'eindeutig', x, y } | { typ: 'keine' }
+   | { typ: 'unendlich', gerade } */
+function loeseSystem(sys) {
+  const g1 = sys.g1, g2 = sys.g2;
+  const det = bSub(bMul(g1.a, g2.b), bMul(g2.a, g1.b));
+  if (!det.istNull()) {
+    return {
+      typ: 'eindeutig',
+      x: bDiv(bSub(bMul(g1.c, g2.b), bMul(g2.c, g1.b)), det),
+      y: bDiv(bSub(bMul(g1.a, g2.c), bMul(g2.a, g1.c)), det)
+    };
+  }
+  /* det = 0: parallel oder identisch? (kreuzweise vergleichen) */
+  const p1 = bMul(g1.a, g2.c), p2 = bMul(g2.a, g1.c);
+  const q1 = bMul(g1.b, g2.c), q2 = bMul(g2.b, g1.c);
+  if (bGleich(p1, p2) && bGleich(q1, q2)) return { typ: 'unendlich', gerade: geradeAus(g1) };
+  return { typ: 'keine' };
+}
+
+/* Lösungsmenge nach Abschnitt 8 */
+function loesungsmengeAnzeige(l) {
+  if (l.typ === 'keine') return 'L = { }';
+  if (l.typ === 'unendlich') return 'L = {(x|y) | ' + geradeAnzeige(l.gerade) + '}';
+  return 'L = {(' + bAnzeigen(l.x) + '|' + bAnzeigen(l.y) + ')}';
+}
+
+/* Zeilenumbruch an Leerzeichen (für System- und Weganzeige).
+   Rechenzeichen bleiben mit der folgenden Zahl zusammen,
+   damit z.B. „− 16" nicht auseinandergerissen wird. */
+function textUmbruch(text, max) {
+  /* Feste Zeilenumbrüche (\n, z.B. Werkzeugtexte) zuerst trennen */
+  if (text.indexOf('\n') >= 0) {
+    return text.split('\n').reduce(function (z, teil) { return z.concat(textUmbruch(teil, max)); }, []);
+  }
+  if (text.length <= max) return [text];
+  const roh = text.split(' ');
+  const zwischen = [];
+  for (let i = 0; i < roh.length; i++) {
+    if (i + 1 < roh.length
+        && (roh[i] === '−' || roh[i] === '+' || roh[i] === '=' || roh[i] === '·')) {
+      zwischen.push(roh[i] + ' ' + roh[i + 1]);
+      i++;
+    } else zwischen.push(roh[i]);
+  }
+  /* Klammerterme zusammenhalten */
+  const zusammen = [];
+  for (let i = 0; i < zwischen.length; i++) {
+    if (zwischen[i].indexOf('(') >= 0 && zwischen[i].indexOf(')') < 0) {
+      let t = zwischen[i];
+      while (i + 1 < zwischen.length && t.indexOf(')') < 0) { i++; t += ' ' + zwischen[i]; }
+      zusammen.push(t);
+    } else zusammen.push(zwischen[i]);
+  }
+  /* Malpunkt-Terme nicht vom Faktor trennen („− 2 · (x + 1)") */
+  const woerter = [];
+  for (let i = 0; i < zusammen.length; i++) {
+    if (woerter.length > 0 && zusammen[i].indexOf('· ') === 0) {
+      woerter[woerter.length - 1] += ' ' + zusammen[i];
+    } else woerter.push(zusammen[i]);
+  }
+  const zeilen = [];
+  let aktuell = '';
+  for (let i = 0; i < woerter.length; i++) {
+    const w = woerter[i];
+    if (aktuell === '') aktuell = w;
+    else if ((aktuell + ' ' + w).length <= max) aktuell += ' ' + w;
+    else { zeilen.push(aktuell); aktuell = w; }
+  }
+  if (aktuell !== '') zeilen.push(aktuell);
+  return zeilen;
+}
+
+/* ============================================================
+   4. Generator – Aufgabenerzeugung
+   ------------------------------------------------------------
+   Erzeugt Aufgaben rückwärts von der gewünschten Lösung aus,
+   getrennt nach Verfahren und Niveau (Abschnitt 9.3).
+   Sonderfälle: leicht ca. 10 %, standard ca. 15 %, plus ca. 20 %. */
+
+const VERFAHREN_LISTE = ['grafisch', 'gleichsetzen', 'einsetzen', 'addition'];
+const SONDERFALL_WKT = { leicht: 0.10, standard: 0.15, plus: 0.20 };
+
+/* Variable, nach der beim Gleichsetzen aufgelöst wird. Der Generator
+   merkt sie sich in sys.vari (dort haben beide Gleichungen den
+   Koeffizienten 1). Sonst: die aufgelöste Variable von I bzw. eine
+   Variable, die in beiden Gleichungen vorkommt – nie durch 0 teilen. */
+function gleichsetzVariable(sys) {
+  if (sys.vari) return sys.vari;
+  if (sys.g1.form.typ === 'aufg') return sys.g1.form.vari;
+  if (!sys.g1.b.istNull() && !sys.g2.b.istNull()) return 'y';
+  return 'x';
+}
+
+/* Verfahrens-Hinweis, passend zur konkreten Aufgabenform:
+   nennt die richtige Variable und das nötige Vorgehen. */
+function hinweisText(verfahren, sys) {
+  if (verfahren === 'grafisch') {
+    return 'Lies den Schnittpunkt ab: erst x, dann y.';
+  }
+  if (verfahren === 'gleichsetzen') {
+    const vari = gleichsetzVariable(sys);
+    const andere = vari === 'y' ? 'x' : 'y';
+    if (sys.g1.form.typ === 'aufg' && sys.g2.form.typ === 'aufg') {
+      return 'Beide Gleichungen sind nach ' + vari + ' aufgelöst. Setze die anderen Seiten gleich und löse nach ' + andere + '.';
+    }
+    return 'Forme beide Gleichungen nach ' + vari + ' um, setze dann gleich und löse.';
+  }
+  if (verfahren === 'einsetzen') {
+    const vari = sys.g1.form.typ === 'aufg' ? sys.g1.form.vari : 'y';
+    const andere = vari === 'y' ? 'x' : 'y';
+    if (sys.g2.form.typ === 'klammer' || sys.g2.form.typ === 'binomX' || sys.g2.form.typ === 'binomY') {
+      return 'Vereinfache zuerst II. Setze dann I ein und löse nach ' + andere + '.';
+    }
+    return 'I ist nach ' + vari + ' aufgelöst. Setze in II ein und löse nach ' + andere + '.';
+  }
+  /* Addition: je nachdem, ob schon entgegengesetzte
+     Koeffizienten vorhanden sind (Abschnitt 9.3) */
+  const plan = additionsPlan(sys.g1, sys.g2);
+  if (plan && plan.f1 === 1 && plan.f2 === 1) {
+    return 'Ein Koeffizient ist schon entgegengesetzt. Addiere I und II.';
+  }
+  return 'Multipliziere passend, damit ein Koeffizient entgegengesetzt ist, und addiere dann.';
+}
+
+function zg(von, bis) { return von + Math.floor(Math.random() * (bis - von + 1)); }
+function zgNichtNull(von, bis) { let z = 0; while (z === 0) z = zg(von, bis); return z; }
+function istSchoen(b) { return b.istGanz() || bDezimal(b) !== null; }
+function klein(b, grenze) { return b.betrag().zahl() <= grenze; }
+function kgVNenner(m1, m2) { return m1.n * m2.n / ggT(m1.n, m2.n); }
+
+/* Lösungspaar je Niveau (Abschnitt 9.3) */
+function erzeugeLoesungspaar(niveau) {
+  if (niveau === 'leicht') return { x: bGanz(zg(-9, 9)), y: bGanz(zg(-9, 9)) };
+  if (niveau === 'standard') {
+    const n = Math.random() < 0.5 ? 1 : [2, 5, 10][zg(0, 2)];
+    return { x: new Bruch(zg(-9 * n, 9 * n), n), y: new Bruch(zg(-9 * n, 9 * n), n) };
+  }
+  const n = [1, 1, 2, 2, 3, 3, 4, 5, 6, 10, 12][zg(0, 10)];
+  return { x: new Bruch(zg(-9 * n, 9 * n), n), y: new Bruch(zg(-9 * n, 9 * n), n) };
+}
+
+/* Anzeigeformen zufällig wählen */
+const GEMISCHT_SPECS = [];
+(function () {
+  const seiten = ['L', 'R'];
+  for (let xi = 0; xi < 2; xi++) for (let yi = 0; yi < 2; yi++) for (let ci = 0; ci < 2; ci++) {
+    const x = seiten[xi], y = seiten[yi], c = seiten[ci];
+    if (x === 'L' && y === 'L' && c === 'L') continue;   /* alles links */
+    if (x === 'R' && y === 'R' && c === 'R') continue;   /* alles rechts */
+    if (x === 'R' && y === 'L' && c === 'R') continue;   /* schon nach y aufgelöst */
+    if (y === 'R' && x === 'L' && c === 'R') continue;   /* schon nach x aufgelöst */
+    GEMISCHT_SPECS.push({ x: x, y: y, c: c });
+  }
+})();
+function gemischtForm() {
+  const s = GEMISCHT_SPECS[zg(0, GEMISCHT_SPECS.length - 1)];
+  return { typ: 'gemischt', x: s.x, y: s.y, c: s.c, ordnung: Math.random() < 0.5 ? 'xy' : 'yx' };
+}
+function normalFormZufall() { return { typ: 'normal', ordnung: Math.random() < 0.5 ? 'xy' : 'yx' }; }
+function aufgForm(vari) { return { typ: 'aufg', vari: vari, reihenfolge: Math.random() < 0.5 ? 'xb' : 'bx' }; }
+
+/* plus: Normalform mit Klammer- oder Binomform dekorieren,
+   wenn die Koeffizienten das hergeben (Abschnitt 9.3). */
+function dekoriereKlammer(g, innen) {
+  const feldK = innen === 'x' ? g.a : g.b;   /* Koeffizient der inneren Variablen */
+  const feldE = innen === 'x' ? g.b : g.a;   /* Koeffizient der anderen Variablen */
+  /* Nur mit positivem Koeffizienten dekorieren (3(2x − 4) + 6y = 0),
+     sonst bliebe ein unschöner negativer Vorfaktor. */
+  if (!feldK.istGanz() || feldK.z < 2) return null;
+  const teiler = [];
+  for (let t = 2; t <= feldK.z; t++) if (feldK.z % t === 0) teiler.push(t);
+  const t = teiler[zg(0, teiler.length - 1)];
+  const u = t;
+  const aIn = feldK.z / t;
+  const d = zgNichtNull(-5, 5);
+  const f = bAdd(g.c, bGanz(u * d));
+  if (!f.istGanz() || Math.abs(f.z) > 20) return null;
+  return { typ: 'klammer', u: u, a: aIn, d: d, e: feldE.z, innen: innen };
+}
+function dekoriereBinomX(g) {
+  /* (px + q)² = p²x² + sy + t  →  Normalform: 2pq·x − s·y = t − q² */
+  if (!g.a.istGanz() || !g.b.istGanz() || g.b.istNull()) return null;
+  const kandidaten = [];
+  for (let p = 1; p <= 4; p++) {
+    if (g.a.z % (2 * p) !== 0) continue;
+    const q = g.a.z / (2 * p);
+    if (q === 0 || Math.abs(q) > 6) continue;
+    const t = g.c.z + q * q;
+    if (Math.abs(t) > 20) continue;
+    kandidaten.push({ p: p, q: q, t: t });
+  }
+  if (!kandidaten.length) return null;
+  const k = kandidaten[zg(0, kandidaten.length - 1)];
+  return { typ: 'binomX', p: k.p, q: k.q, s: -g.b.z, t: k.t };
+}
+function dekoriereBinomY(g) {
+  /* (y + q)² + ux = y · y + v  →  Normalform: u·x + 2q·y = v − q² */
+  if (!g.a.istGanz() || !g.b.istGanz() || g.a.istNull() || g.b.istNull()) return null;
+  if (g.b.z % 2 !== 0) return null;
+  const q = g.b.z / 2;
+  if (q === 0 || Math.abs(q) > 6) return null;
+  const v = g.c.z + q * q;
+  if (Math.abs(v) > 20) return null;
+  return { typ: 'binomY', q: q, u: g.a.z, v: v };
+}
+
+/* ---------- grafisch: Schnittpunkt immer ganzzahlig ---------- */
+/* ---------- grafisch: Schnittpunkt immer ganzzahlig ---------- */
+function steigungFuerNiveau(niveau) {
+  if (niveau === 'leicht') return bGanz(zg(-3, 3));
+  if (niveau === 'standard') {
+    return Math.random() < 0.5 ? bGanz(zg(-3, 3)) : new Bruch(zg(-6, 6), 2);
+  }
+  const n = [2, 3, 4][zg(0, 2)];
+  return new Bruch(zg(-4 * n, 4 * n), n);
+}
+
+function erzeugeGrafisch(niveau, sf) {
+  for (let versuch = 0; versuch < 400; versuch++) {
+    /* Bei parallelen bzw. identischen Geraden (Sonderfälle) ist die
+       Steigung gemeinsam, sonst wird sie unabhängig gewählt. */
+    const m1 = steigungFuerNiveau(niveau);
+    const m2 = sf === 'eindeutig' ? steigungFuerNiveau(niveau) : m1;
+
+    if (sf === 'eindeutig') {
+      if (bGleich(m1, m2)) continue;
+      const kgN = kgVNenner(m1, m2);
+      const q = Math.floor(6 / kgN);
+      if (q === 0) continue;
+      const x0 = zg(-q, q) * kgN;      /* Vielfaches des Nenners → ganzzahliger y-Wert */
+      const y0 = zg(-6, 6);
+      const b1 = bSub(bGanz(y0), bMul(m1, bGanz(x0)));
+      const b2 = bSub(bGanz(y0), bMul(m2, bGanz(x0)));
+      if (!b1.istGanz() || !b2.istGanz()) continue;
+      if (Math.abs(b1.z) > 8 || Math.abs(b2.z) > 8) continue;
+      const g1 = glNormalform(bNeg(m1), bGanz(1), b1, { typ: 'aufg', vari: 'y', reihenfolge: 'xb' });
+      const g2 = glNormalform(bNeg(m2), bGanz(1), b2, { typ: 'aufg', vari: 'y', reihenfolge: 'xb' });
+      if (glAnzeige(g1) === glAnzeige(g2)) continue;
+      return {
+        system: { g1: g1, g2: g2, verfahren: 'grafisch' },
+        loesung: { typ: 'eindeutig', x: bGanz(x0), y: bGanz(y0) }
+      };
+    }
+
+    if (sf === 'keine') {
+      /* Parallel: gleiche Steigung, aber unabhängige
+         y-Achsenabschnitte – die Geraden schneiden sich nie. */
+      const b1 = bGanz(zg(-8, 8));
+      const b2 = bGanz(zg(-8, 8));
+      if (b1.z === b2.z) continue;
+      const g1 = glNormalform(bNeg(m1), bGanz(1), b1, { typ: 'aufg', vari: 'y', reihenfolge: 'xb' });
+      const g2 = glNormalform(bNeg(m1), bGanz(1), b2, { typ: 'aufg', vari: 'y', reihenfolge: 'xb' });
+      if (glAnzeige(g1) === glAnzeige(g2)) continue;
+      return { system: { g1: g1, g2: g2, verfahren: 'grafisch' }, loesung: { typ: 'keine' } };
+    }
+
+    /* unendlich viele Lösungen: beide Gleichungen zeigen dieselbe
+       Gerade, die zweite nur anders dargestellt (m ≠ 0). */
+    if (m1.istNull()) continue;
+    const q = Math.floor(6 / m1.n);
+    if (q === 0) continue;
+    const x0 = zg(-q, q) * m1.n;
+    const y0 = zg(-6, 6);
+    const b1 = bSub(bGanz(y0), bMul(m1, bGanz(x0)));
+    if (!b1.istGanz() || Math.abs(b1.z) > 8) continue;
+    const g1 = glNormalform(bNeg(m1), bGanz(1), b1, { typ: 'aufg', vari: 'y', reihenfolge: 'xb' });
+    const g2 = glNormalform(bNeg(m1), bGanz(1), b1, { typ: 'aufg', vari: 'y', reihenfolge: 'bx' });
+    if (glAnzeige(g1) === glAnzeige(g2)) continue;
+    return {
+      system: { g1: g1, g2: g2, verfahren: 'grafisch' },
+      loesung: { typ: 'unendlich', gerade: geradeAus(g1) }
+    };
+  }
+  return null;
+}
+
+/* ---------- Gleichsetzen: beide nach derselben Variablen ---------- */
+function gleichsetzenSteigung(niveau) {
+  if (niveau === 'leicht') return bGanz(zgNichtNull(-4, 4));
+  if (niveau === 'standard') return bGanz(zg(-5, 5));
+  const n = [2, 3, 4, 5, 6][zg(0, 4)];
+  return new Bruch(zgNichtNull(-3 * n, 3 * n), n);
+}
+
+function erzeugeGleichsetzen(niveau, sf) {
+  for (let versuch = 0; versuch < 400; versuch++) {
+    const vari = niveau === 'plus' ? 'y' : (Math.random() < 0.7 ? 'y' : 'x');
+    const m1 = gleichsetzenSteigung(niveau);
+    const m2 = sf === 'eindeutig' ? gleichsetzenSteigung(niveau) : m1;
+    const kopf = function (m) {
+      return vari === 'y' ? [bNeg(m), bGanz(1)] : [bGanz(1), bNeg(m)];
+    };
+
+    if (sf === 'eindeutig') {
+      if (bGleich(m1, m2)) continue;
+      const lsg = erzeugeLoesungspaar(niveau);
+      const b1 = bSub(lsg[vari], bMul(m1, lsg[vari === 'y' ? 'x' : 'y']));
+      const b2 = bSub(lsg[vari], bMul(m2, lsg[vari === 'y' ? 'x' : 'y']));
+      if (niveau === 'plus') {
+        if (!istSchoen(b1) || !istSchoen(b2) || !klein(b1, 20) || !klein(b2, 20)) continue;
+      } else {
+        if (!b1.istGanz() || !b2.istGanz()) continue;
+        if (Math.abs(b1.z) > 20 || Math.abs(b2.z) > 20) continue;
+      }
+      let form1, form2;
+      if (niveau === 'leicht') { form1 = aufgForm(vari); form2 = aufgForm(vari); }
+      else if (niveau === 'standard') { form1 = gemischtForm(); form2 = gemischtForm(); }
+      else { form1 = aufgForm(vari); form2 = { typ: 'aufg', vari: vari, reihenfolge: form1.reihenfolge === 'xb' ? 'bx' : 'xb' }; }
+      const k1 = kopf(m1), k2 = kopf(m2);
+      const g1 = glNormalform(k1[0], k1[1], b1, form1);
+      const g2 = glNormalform(k2[0], k2[1], b2, form2);
+      if (glAnzeige(g1) === glAnzeige(g2)) continue;
+      return {
+        system: { g1: g1, g2: g2, verfahren: 'gleichsetzen', vari: vari },
+        loesung: { typ: 'eindeutig', x: lsg.x, y: lsg.y }
+      };
+    }
+
+    if (sf === 'keine') {
+      /* Parallel: gleiche Steigung, unabhängiger Achsenabschnitt */
+      const b1 = bGanz(zg(-9, 9));
+      const b2 = bGanz(zg(-9, 9));
+      if (b1.z === b2.z) continue;
+      let form1, form2;
+      if (niveau === 'standard') { form1 = gemischtForm(); form2 = gemischtForm(); }
+      else { form1 = aufgForm(vari); form2 = aufgForm(vari); }
+      const k = kopf(m1);
+      const g1 = glNormalform(k[0], k[1], b1, form1);
+      const g2 = glNormalform(k[0], k[1], b2, form2);
+      if (glAnzeige(g1) === glAnzeige(g2)) continue;
+      return { system: { g1: g1, g2: g2, verfahren: 'gleichsetzen', vari: vari }, loesung: { typ: 'keine' } };
+    }
+
+    /* unendlich viele Lösungen: identische Gleichung, zweite nur
+       anders dargestellt (m ≠ 0, sonst gleiche Anzeige) */
+    if (m1.istNull()) continue;
+    const lsg = erzeugeLoesungspaar(niveau);
+    const b1 = bSub(lsg[vari], bMul(m1, lsg[vari === 'y' ? 'x' : 'y']));
+    if (niveau === 'plus') { if (!istSchoen(b1) || !klein(b1, 20)) continue; }
+    else { if (!b1.istGanz() || Math.abs(b1.z) > 20) continue; }
+    let form1, form2;
+    if (niveau === 'standard') { form1 = gemischtForm(); form2 = gemischtForm(); }
+    else { form1 = { typ: 'aufg', vari: vari, reihenfolge: 'xb' }; form2 = { typ: 'aufg', vari: vari, reihenfolge: 'bx' }; }
+    const k = kopf(m1);
+    const g1 = glNormalform(k[0], k[1], b1, form1);
+    const g2 = glNormalform(k[0], k[1], b1, form2);
+    if (glAnzeige(g1) === glAnzeige(g2)) continue;
+    return {
+      system: { g1: g1, g2: g2, verfahren: 'gleichsetzen', vari: vari },
+      loesung: { typ: 'unendlich', gerade: geradeAus(g1) }
+    };
+  }
+  return null;
+}
+
+/* ---------- Einsetzen: I aufgelöst, II Normalform-artig ---------- */
+function erzeugeEinsetzen(niveau, sf) {
+  for (let versuch = 0; versuch < 400; versuch++) {
+    const vari = Math.random() < 0.6 ? 'y' : 'x';
+    const andere = vari === 'y' ? 'x' : 'y';
+    let m;
+    if (niveau === 'leicht') m = bGanz(zgNichtNull(-4, 4));
+    else if (niveau === 'standard') m = bGanz(zg(-5, 5));
+    else { const n = [2, 3, 4, 5, 6][zg(0, 4)]; m = new Bruch(zgNichtNull(-3 * n, 3 * n), n); }
+    const lsg = erzeugeLoesungspaar(niveau);
+    const b0 = bSub(lsg[vari], bMul(m, lsg[andere]));
+    if (niveau === 'plus') { if (!istSchoen(b0) || !klein(b0, 20)) continue; }
+    else { if (!b0.istGanz() || Math.abs(b0.z) > 20) continue; }
+
+    let a2, b2, c2, t = 1;
+    if (sf === 'eindeutig') {
+      a2 = bGanz(zgNichtNull(-6, 6));
+      b2 = bGanz(zgNichtNull(-6, 6));
+      /* det ≠ 0: II darf nicht zur I-Geraden parallel sein */
+      const kNeu = vari === 'y' ? bAdd(a2, bMul(b2, m)) : bAdd(b2, bMul(a2, m));
+      if (kNeu.istNull()) continue;
+      c2 = bAdd(bMul(a2, lsg.x), bMul(b2, lsg.y));
+    } else {
+      /* II proportional zur I-Normalform (t·(−m, 1, b0) bzw. t·(1, −m, b0)) */
+      if (niveau === 'plus') t = m.istGanz() ? zgNichtNull(-3, 3) : m.n * zgNichtNull(-2, 2);
+      else t = zgNichtNull(-3, 3);
+      if (vari === 'y') { a2 = bMul(bGanz(-t), m); b2 = bGanz(t); }
+      else { b2 = bMul(bGanz(-t), m); a2 = bGanz(t); }
+      if (!a2.istGanz() || !b2.istGanz()) continue;
+      c2 = bMul(bGanz(t), b0);
+      if (sf === 'keine') c2 = bAdd(c2, bGanz(zgNichtNull(-6, 6)));
+    }
+    if (!c2.istGanz() || Math.abs(c2.z) > 20) continue;
+    if (Math.abs(a2.z) > 20 || Math.abs(b2.z) > 20) continue;
+
+    const g1 = glNormalform(
+      vari === 'y' ? bNeg(m) : bGanz(1),
+      vari === 'y' ? bGanz(1) : bNeg(m),
+      b0, aufgForm(vari));
+    const g2 = glNormalform(a2, b2, c2);
+    if (niveau === 'leicht') g2.form = normalFormZufall();
+    else if (niveau === 'standard') g2.form = gemischtForm();
+    else if (sf === 'eindeutig') {
+      const r = Math.random();
+      const deko = r < 0.3 ? dekoriereKlammer(g2, 'x')
+        : r < 0.5 ? dekoriereBinomX(g2)
+        : r < 0.65 ? dekoriereBinomY(g2)
+        : null;
+      g2.form = deko || normalFormZufall();
+    } else g2.form = normalFormZufall();
+    if (glAnzeige(g1) === glAnzeige(g2)) continue;
+    const loesung = sf === 'eindeutig' ? { typ: 'eindeutig', x: lsg.x, y: lsg.y }
+      : (sf === 'keine' ? { typ: 'keine' } : { typ: 'unendlich', gerade: geradeAus(g1) });
+    return { system: { g1: g1, g2: g2, verfahren: 'einsetzen' }, loesung: loesung };
+  }
+  return null;
+}
+
+/* ---------- Addition: beide in Normalform ---------- */
+function erzeugeAddition(niveau, sf) {
+  for (let versuch = 0; versuch < 400; versuch++) {
+    const lsg = erzeugeLoesungspaar(niveau);
+    let a1, b1, a2, b2, t = 1;
+    if (sf === 'eindeutig') {
+      if (niveau === 'leicht') {
+        /* schon passend: ein Koeffizientenpaar ist entgegengesetzt */
+        a1 = zgNichtNull(-5, 5); b1 = zgNichtNull(-5, 5);
+        if (Math.random() < 0.5) { a2 = -a1; b2 = zgNichtNull(-5, 5); }
+        else { b2 = -b1; a2 = zgNichtNull(-5, 5); }
+      } else {
+        a1 = zgNichtNull(-6, 6); b1 = zgNichtNull(-6, 6);
+        a2 = zgNichtNull(-6, 6); b2 = zgNichtNull(-6, 6);
+        /* standard/plus: es muss erst multipliziert werden */
+        if (a2 === -a1 || b2 === -b1) continue;
+      }
+      if (a1 * b2 - a2 * b1 === 0) continue;
+    } else {
+      a1 = zgNichtNull(-5, 5); b1 = zgNichtNull(-5, 5);
+      t = zgNichtNull(-3, 3);
+      a2 = t * a1; b2 = t * b1;
+    }
+    const c1 = bAdd(bMul(bGanz(a1), lsg.x), bMul(bGanz(b1), lsg.y));
+    let c2;
+    if (sf === 'unendlich') c2 = bMul(bGanz(t), c1);
+    else if (sf === 'keine') c2 = bAdd(bMul(bGanz(t), c1), bGanz(zgNichtNull(-6, 6)));
+    else c2 = bAdd(bMul(bGanz(a2), lsg.x), bMul(bGanz(b2), lsg.y));
+    if (!c1.istGanz() || !c2.istGanz()) continue;
+    if (Math.abs(c1.z) > 20 || Math.abs(c2.z) > 20) continue;
+    const g1 = glNormalform(bGanz(a1), bGanz(b1), c1);
+    const g2 = glNormalform(bGanz(a2), bGanz(b2), c2);
+    if (niveau === 'leicht') { g1.form = normalFormZufall(); g2.form = normalFormZufall(); }
+    else if (niveau === 'standard') {
+      g1.form = Math.random() < 0.5 ? normalFormZufall() : gemischtForm();
+      g2.form = Math.random() < 0.5 ? normalFormZufall() : gemischtForm();
+    } else {
+      const deko = function (gg,binomYOk) {
+        const r = Math.random();
+        if (r < 0.3) return dekoriereKlammer(gg, 'x');
+        if (r < 0.5) return dekoriereBinomX(gg);
+        if (r < 0.65 && binomYOk) return dekoriereBinomY(gg);
+        return null;
+      };
+      g1.form = deko(g1, false) || normalFormZufall();
+      g2.form = deko(g2, true) || normalFormZufall();
+    }
+    if (glAnzeige(g1) === glAnzeige(g2)) continue;
+    const loesung = sf === 'eindeutig' ? { typ: 'eindeutig', x: lsg.x, y: lsg.y }
+      : (sf === 'keine' ? { typ: 'keine' } : { typ: 'unendlich', gerade: geradeAus(g1) });
+    return { system: { g1: g1, g2: g2, verfahren: 'addition' }, loesung: loesung };
+  }
+  return null;
+}
+
+function erzeugeAufgabe(verfahren, niveau, sfTyp) {
+  let sf = sfTyp;
+  if (sf === 'auto' || sf === undefined) {
+    sf = Math.random() < SONDERFALL_WKT[niveau]
+      ? (Math.random() < 0.5 ? 'keine' : 'unendlich') : 'eindeutig';
+  }
+  let auf = null;
+  for (let i = 0; i < 60 && !auf; i++) {
+    if (verfahren === 'grafisch') auf = erzeugeGrafisch(niveau, sf);
+    else if (verfahren === 'gleichsetzen') auf = erzeugeGleichsetzen(niveau, sf);
+    else if (verfahren === 'einsetzen') auf = erzeugeEinsetzen(niveau, sf);
+    else if (verfahren === 'addition') auf = erzeugeAddition(niveau, sf);
+  }
+  if (!auf) {   /* Notfall: einfachste Stufe desselben Verfahrens */
+    if (verfahren === 'grafisch') auf = erzeugeGrafisch('leicht', 'eindeutig');
+    else if (verfahren === 'gleichsetzen') auf = erzeugeGleichsetzen('leicht', 'eindeutig');
+    else if (verfahren === 'einsetzen') auf = erzeugeEinsetzen('leicht', 'eindeutig');
+    else auf = erzeugeAddition('leicht', 'eindeutig');
+  }
+  /* sfTyp immer aus der tatsächlichen Lösung ableiten, damit
+     Kennzeichnung, Statistik und Aufgabenwiederholung stimmen */
+  auf.sfTyp = auf.loesung.typ;
+  auf.hinweis = hinweisText(verfahren, auf.system);
+  auf.luecke = lueckeText(verfahren, auf);
+  return auf;
+}
+
+/* Lückenschritte (leicht, 9.3) – kompakt gehalten, damit sie
+   neben der Hinweis-Schaltfläche Platz finden. */
+function lueckeText(verfahren, auf) {
+  const sys = auf.system;
+  if (verfahren === 'grafisch') return 'S(__|__) ablesen';
+  if (verfahren === 'gleichsetzen') {
+    const vari = gleichsetzVariable(sys);
+    return 'Gleichsetzen: __·' + (vari === 'y' ? 'x' : 'y') + ' = __';
+  }
+  if (verfahren === 'einsetzen') {
+    const vari = sys.g1.form.vari;
+    return 'Einsetzen: __·' + (vari === 'y' ? 'x' : 'y') + ' = __';
+  }
+  const plan = additionsPlan(sys.g1, sys.g2);
+  return 'I + II: __·' + (plan && plan.elim === 'x' ? 'y' : 'x') + ' = __';
+}
+
+/* ============================================================
+   5. Loeser – Lösungsweg Schritt für Schritt
+   ------------------------------------------------------------
+   Löst jedes System unabhängig vom Generator und erzeugt den
+   Lösungsweg im jeweiligen Verfahren Zeile für Zeile, wie im
+   Heft: Umformen der Ausgangsgleichungen, Lösen, Probe (11). */
+
+/* Additionsplan: Eliminationsvariable mit den kleinsten
+   Multiplikationsfaktoren; Faktoren immer positiv, bei gleichen
+   Vorzeichen wird subtrahiert (I − II), sonst addiert (I + II). */
+function additionsPlan(g1, g2) {
+  function planFuer(k1w, k2w, elim) {
+    const az1 = Math.abs(k1w), az2 = Math.abs(k2w);
+    if (az1 === 0 || az2 === 0) return null;
+    const g = ggT(az1, az2);
+    const f1 = az2 / g, f2 = az1 / g;
+    const subtrahieren = (k1w > 0) === (k2w > 0);
+    return { elim: elim, f1: f1, f2: f2, op: subtrahieren ? '−' : '+', score: f1 + f2 };
+  }
+  const planX = planFuer(g1.a.z, g2.a.z, 'x');
+  const planY = planFuer(g1.b.z, g2.b.z, 'y');
+  if (planX && planY) return planX.score <= planY.score ? planX : planY;
+  return planX || planY;
+}
+
+function glMult(g, k) {
+  return glNormalform(bMul(g.a, bGanz(k)), bMul(g.b, bGanz(k)), bMul(g.c, bGanz(k)), g.form);
+}
+
+/* Zwischenschritte beim Vereinfachen (plus: Klammern, binomische Formeln) */
+function klammerAus(g) {
+  const f = g.form;
+  const anderes = f.innen === 'x' ? 'y' : 'x';
+  return seiteAnzeigen([
+    { k: bGanz(f.u * f.a), v: f.innen },
+    { k: bGanz(f.u * f.d), v: null },
+    { k: bGanz(f.e), v: anderes }
+  ]) + ' = ' + klammerRechts(g);
+}
+function binomXAus(g) {
+  const f = g.form;
+  return seiteAnzeigen([
+    { k: bGanz(f.p * f.p), v: 'x²' }, { k: bGanz(2 * f.p * f.q), v: 'x' }, { k: bGanz(f.q * f.q), v: null }
+  ]) + ' = ' + seiteAnzeigen([
+    { k: bGanz(f.p * f.p), v: 'x²' }, { k: bGanz(f.s), v: 'y' }, { k: bGanz(f.t), v: null }
+  ]);
+}
+function binomXLinear(g) {
+  const f = g.form;
+  return seiteAnzeigen([{ k: bGanz(2 * f.p * f.q), v: 'x' }, { k: bGanz(f.q * f.q), v: null }])
+    + ' = ' + seiteAnzeigen([{ k: bGanz(f.s), v: 'y' }, { k: bGanz(f.t), v: null }]);
+}
+function binomYAus(g) {
+  const f = g.form;
+  return seiteAnzeigen([
+    { k: bGanz(1), v: 'y²' }, { k: bGanz(2 * f.q), v: 'y' },
+    { k: bGanz(f.q * f.q), v: null }, { k: bGanz(f.u), v: 'x' }
+  ]) + ' = ' + seiteAnzeigen([{ k: bGanz(1), v: 'y · y' }, { k: bGanz(f.v), v: null }]);
+}
+function binomYLinear(g) {
+  const f = g.form;
+  return seiteAnzeigen([{ k: bGanz(2 * f.q), v: 'y' }, { k: bGanz(f.q * f.q), v: null }, { k: bGanz(f.u), v: 'x' }])
+    + ' = ' + seiteAnzeigen([{ k: bGanz(f.v), v: null }]);
+}
+
+/* Vorarbeit: Ausgangsgleichung in Normalform oder in die
+   aufgelöste Form überführen; ergibt Kopf- und Umformzeilen. */
+function vorarbeit(g, name, ziel) {
+  const schritte = [];
+  const f = g.form;
+  const normal = normalformAnzeige(g);
+  /* Überführung in die Normalform – nur wenn sich dabei etwas
+     ändert. Gemischt-Formen, die nur die Termreihenfolge ändern
+     (alles links außer der Konstanten), sind schon Normalform. */
+  const nurOrdnung = (f.typ === 'gemischt' && f.x === 'L' && f.y === 'L' && f.c === 'R');
+  const brauchtNormal = (f.typ === 'klammer' || f.typ === 'binomX' || f.typ === 'binomY'
+    || (f.typ === 'gemischt' && !nurOrdnung));
+  if (brauchtNormal) {
+    if (f.typ === 'gemischt') schritte.push('→ ' + normal);
+    else if (f.typ === 'klammer') { schritte.push('→ ' + klammerAus(g)); schritte.push('→ ' + normal); }
+    else if (f.typ === 'binomX') { schritte.push('→ ' + binomXAus(g)); schritte.push('→ ' + binomXLinear(g)); schritte.push('→ ' + normal); }
+    else if (f.typ === 'binomY') { schritte.push('→ ' + binomYAus(g)); schritte.push('→ ' + binomYLinear(g)); schritte.push('→ ' + normal); }
+  }
+  if (ziel === 'y' || ziel === 'x') {
+    if (f.typ === 'aufg' && f.vari === ziel) {
+      return { kopf: name + ': ' + glAnzeige(g), schritte: [] };
+    }
+    const a = aufgeloestNach(g, ziel);
+    const aufg = aufgeloestAnzeige(ziel, a.m, a.b, 'xb');
+    /* Schritt weglassen, wenn die Anzeige schon der aufgelösten
+       Form entspricht (z.B. bei wegfallendem x-Term) */
+    if (aufg !== glAnzeige(g) && schritte[schritte.length - 1] !== '→ ' + aufg) schritte.push('→ ' + aufg);
+  }
+  return { kopf: name + ': ' + glAnzeige(g), schritte: schritte };
+}
+
+/* Zahlenterme mit Malpunkt (Abschnitt 8): „2 · 3", „−2 · (−3)" */
+function zahlKlammern(b) { return b.istNegativ() ? '(' + bAnzeigen(b) + ')' : bAnzeigen(b); }
+function zahlTerm(k, wert) {
+  const ks = k.betrag().istEins() ? '' : bAnzeigen(k.betrag()) + ' · ';
+  return ks + zahlKlammern(wert);
+}
+function faktorTerm(k, wert) {
+  return (k.istNegativ() ? '−' : '') + zahlTerm(k, wert);
+}
+function rechteSeiteZahlen(m, wert, b0) {
+  if (m.istNull()) return bAnzeigen(b0);
+  let s = faktorTerm(m, wert);
+  if (!b0.istNull()) s += (b0.istNegativ() ? ' − ' : ' + ') + bAnzeigen(b0.betrag());
+  return s;
+}
+function stueckeVerknuepfen(st) {
+  let s = '';
+  for (let i = 0; i < st.length; i++) {
+    s += (i === 0 ? (st[i].neg ? '−' : '') : (st[i].neg ? ' − ' : ' + ')) + st[i].text;
+  }
+  return s === '' ? '0' : s;
+}
+function probeZeile(sys, name, l) {
+  const g = name === 'I' ? sys.g1 : sys.g2;
+  const st = [];
+  if (!g.a.istNull()) st.push({ text: zahlTerm(g.a, l.x), neg: g.a.istNegativ() });
+  if (!g.b.istNull()) st.push({ text: zahlTerm(g.b, l.y), neg: g.b.istNegativ() });
+  return 'Probe ' + name + ': ' + stueckeVerknuepfen(st) + ' = ' + bAnzeigen(g.c) + ' ✓';
+}
+
+/* Der vollständige Lösungsweg im jeweiligen Verfahren (11). */
+function erzeugeWeg(sys, verfahren, l) {
+  const Z = [];
+  function wz(text) { textUmbruch(text, 29).forEach(function (z) { Z.push(z); }); }
+  function vor(name, g, ziel) {
+    const v = vorarbeit(g, name, ziel);
+    wz((name === 'I' ? '' : '∧ ') + v.kopf);
+    for (let i = 0; i < v.schritte.length; i++) wz('   ' + v.schritte[i]);
+  }
+
+  if (verfahren === 'grafisch') {
+    const gr1 = geradeAus(sys.g1), gr2 = geradeAus(sys.g2);
+    wz('I: ' + glAnzeige(sys.g1));
+    wz('∧ II: ' + glAnzeige(sys.g2));
+    Z.push('');
+    if (l.typ === 'eindeutig') {
+      wz('Ablesen: S(' + bAnzeigen(l.x) + '|' + bAnzeigen(l.y) + ')');
+      Z.push('');
+      wz('Probe I: ' + bAnzeigen(l.y) + ' = ' + rechteSeiteZahlen(gr1.m, l.x, gr1.b));
+      wz('Probe II: ' + bAnzeigen(l.y) + ' = ' + rechteSeiteZahlen(gr2.m, l.x, gr2.b));
+      Z.push('');
+      wz(loesungsmengeAnzeige(l));
+    } else if (l.typ === 'keine') {
+      wz('Beide Geraden haben die Steigung ' + bAnzeigen(gr1.m) + '.');
+      wz('Sie sind parallel und schneiden sich nie.');
+      Z.push('');
+      wz('L = { }');
+    } else {
+      wz('Beide Gleichungen beschreiben dieselbe');
+      wz('Gerade – jeder ihrer Punkte ist eine Lösung.');
+      Z.push('');
+      wz('L = {(x|y) | ' + geradeAnzeige(gr1) + '}');
+    }
+    return Z;
+  }
+
+  if (verfahren === 'gleichsetzen') {
+    const vari = gleichsetzVariable(sys);
+    const andere = vari === 'y' ? 'x' : 'y';
+    vor('I', sys.g1, vari);
+    vor('II', sys.g2, vari);
+    Z.push('');
+    const a1 = aufgeloestNach(sys.g1, vari), a2 = aufgeloestNach(sys.g2, vari);
+    wz('Gleichsetzen: ' + seiteAnzeigen([{ k: a1.m, v: andere }, { k: a1.b, v: null }])
+      + ' = ' + seiteAnzeigen([{ k: a2.m, v: andere }, { k: a2.b, v: null }]));
+    if (l.typ === 'eindeutig') {
+      const k = bSub(a1.m, a2.m);
+      if (!k.istEins()) {
+        wz(seiteAnzeigen([{ k: k, v: andere }]) + ' = ' + bAnzeigen(bSub(a2.b, a1.b)));
+      }
+      wz(andere + ' = ' + bAnzeigen(andere === 'x' ? l.x : l.y));
+      Z.push('');
+      const rhs = rechteSeiteZahlen(a1.m, andere === 'x' ? l.x : l.y, a1.b);
+      const erg = bAnzeigen(vari === 'y' ? l.y : l.x);
+      if (rhs !== erg) wz('Einsetzen in I: ' + vari + ' = ' + rhs);
+      wz(vari + ' = ' + erg);
+      Z.push('');
+      wz(probeZeile(sys, 'II', l));
+      Z.push('');
+      wz(loesungsmengeAnzeige(l));
+    } else if (l.typ === 'keine') {
+      wz(bAnzeigen(a1.b) + ' = ' + bAnzeigen(a2.b));
+      wz('Das ist ein Widerspruch:');
+      wz('kein Schnittpunkt, keine Lösung!');
+      Z.push('');
+      wz('L = { }');
+    } else {
+      wz('Das ist immer wahr – beide Gleichungen');
+      wz('gehören zur selben Geraden!');
+      Z.push('');
+      wz('L = {(x|y) | ' + geradeAnzeige(geradeAus(sys.g1)) + '}');
+    }
+    return Z;
+  }
+
+  if (verfahren === 'einsetzen') {
+    const vari = sys.g1.form.vari;
+    const andere = vari === 'y' ? 'x' : 'y';
+    vor('I', sys.g1, vari);
+    vor('II', sys.g2, 'normal');
+    Z.push('');
+    const a1 = aufgeloestNach(sys.g1, vari);
+    const g2 = sys.g2;
+    const kSym = vari === 'y' ? g2.a : g2.b;     /* Term, der Symbol bleibt */
+    const kErsetzt = vari === 'y' ? g2.b : g2.a; /* Koeffizient des eingesetzten Terms */
+    const klammer = '(' + seiteAnzeigen([{ k: a1.m, v: andere }, { k: a1.b, v: null }]) + ')';
+    const st = [];
+    if (!kSym.istNull()) st.push({ text: seiteAnzeigen([{ k: kSym.betrag(), v: andere }]), neg: kSym.istNegativ() });
+    st.push({
+      text: kErsetzt.betrag().istEins() ? klammer : bAnzeigen(kErsetzt.betrag()) + ' · ' + klammer,
+      neg: kErsetzt.istNegativ()
+    });
+    wz('Einsetzen in II: ' + stueckeVerknuepfen(st) + ' = ' + bAnzeigen(g2.c));
+    const kNeu = bAdd(kSym, bMul(kErsetzt, a1.m));
+    const cNeu = bSub(g2.c, bMul(kErsetzt, a1.b));
+    const ausmult = '→ ' + seiteAnzeigen([
+      { k: kSym, v: andere }, { k: bMul(kErsetzt, a1.m), v: andere }, { k: bMul(kErsetzt, a1.b), v: null }
+    ]) + ' = ' + bAnzeigen(g2.c);
+    const zusammen = '→ ' + seiteAnzeigen([{ k: kNeu, v: andere }]) + ' = ' + bAnzeigen(cNeu);
+    if (ausmult !== zusammen) wz(ausmult);
+    wz(zusammen);
+    if (l.typ === 'eindeutig') {
+      wz(andere + ' = ' + bAnzeigen(andere === 'x' ? l.x : l.y));
+      Z.push('');
+      const rhs = rechteSeiteZahlen(a1.m, andere === 'x' ? l.x : l.y, a1.b);
+      const erg = bAnzeigen(vari === 'y' ? l.y : l.x);
+      if (rhs !== erg) wz('Einsetzen in I: ' + vari + ' = ' + rhs);
+      wz(vari + ' = ' + erg);
+      Z.push('');
+      wz(probeZeile(sys, 'II', l));
+      Z.push('');
+      wz(loesungsmengeAnzeige(l));
+    } else if (!cNeu.istNull()) {
+      wz('Widerspruch – die eingesetzte');
+      wz('Gleichung ist nie erfüllt. Keine Lösung!');
+      Z.push('');
+      wz('L = { }');
+    } else {
+      wz('Immer wahr – beide Gleichungen');
+      wz('beschreiben dieselbe Gerade!');
+      Z.push('');
+      wz('L = {(x|y) | ' + geradeAnzeige(geradeAus(sys.g1)) + '}');
+    }
+    return Z;
+  }
+
+  /* ---------- Additionsverfahren ---------- */
+  vor('I', sys.g1, 'normal');
+  vor('II', sys.g2, 'normal');
+  Z.push('');
+  const plan = additionsPlan(sys.g1, sys.g2);
+  const g1m = glMult(sys.g1, plan.f1), g2m = glMult(sys.g2, plan.f2);
+  if (plan.f1 !== 1) wz('I · ' + plan.f1 + ': ' + normalformAnzeige(g1m));
+  if (plan.f2 !== 1) wz('II · ' + plan.f2 + ': ' + normalformAnzeige(g2m));
+  const sA = plan.op === '−' ? bSub(g1m.a, g2m.a) : bAdd(g1m.a, g2m.a);
+  const sB = plan.op === '−' ? bSub(g1m.b, g2m.b) : bAdd(g1m.b, g2m.b);
+  const sC = plan.op === '−' ? bSub(g1m.c, g2m.c) : bAdd(g1m.c, g2m.c);
+  const opText = plan.op === '−' ? 'I − II' : 'I + II';
+  const zielVar = plan.elim === 'x' ? 'y' : 'x';
+  const koeff = plan.elim === 'x' ? sB : sA;
+  if (l.typ !== 'eindeutig') {
+    wz(opText + ': 0 = ' + bAnzeigen(sC));
+    if (!sC.istNull()) {
+      wz('Widerspruch – die Gleichungen passen');
+      wz('nie zusammen. Keine Lösung!');
+      Z.push('');
+      wz('L = { }');
+    } else {
+      wz('Immer wahr – beide Gleichungen');
+      wz('beschreiben dieselbe Gerade!');
+      Z.push('');
+      wz('L = {(x|y) | ' + geradeAnzeige(geradeAus(sys.g1)) + '}');
+    }
+    return Z;
+  }
+  wz(opText + ': ' + seiteAnzeigen([{ k: koeff, v: zielVar }]) + ' = ' + bAnzeigen(sC));
+  wz(zielVar + ' = ' + bAnzeigen(zielVar === 'x' ? l.x : l.y));
+  Z.push('');
+  /* Einsetzen in eine Gleichung, die die eliminierte Variable noch enthält */
+  const gI = plan.elim === 'x' ? (sys.g1.a.istNull() ? sys.g2 : sys.g1)
+    : (sys.g1.b.istNull() ? sys.g2 : sys.g1);
+  const nameI = gI === sys.g1 ? 'I' : 'II';
+  const zielWert = zielVar === 'x' ? l.x : l.y;
+  const kSym2 = plan.elim === 'x' ? gI.a : gI.b;
+  const kBek = plan.elim === 'x' ? gI.b : gI.a;
+  const st = [];
+  if (!kSym2.istNull()) st.push({ text: seiteAnzeigen([{ k: kSym2.betrag(), v: plan.elim }]), neg: kSym2.istNegativ() });
+  if (!kBek.istNull()) st.push({ text: zahlTerm(kBek, zielWert), neg: kBek.istNegativ() });
+  wz('Einsetzen in ' + nameI + ': ' + stueckeVerknuepfen(st) + ' = ' + bAnzeigen(gI.c));
+  wz('→ ' + seiteAnzeigen([{ k: kSym2, v: plan.elim }]) + ' = ' + bAnzeigen(bSub(gI.c, bMul(kBek, zielWert))));
+  wz(plan.elim + ' = ' + bAnzeigen(plan.elim === 'x' ? l.x : l.y));
+  Z.push('');
+  wz(probeZeile(sys, nameI === 'I' ? 'II' : 'I', l));
+  Z.push('');
+  wz(loesungsmengeAnzeige(l));
+  return Z;
+}
+
+/* ============================================================
+   6. Eingabe – Parser für Zahleneingaben, Antwortprüfung
+   ------------------------------------------------------------
+   Akzeptiert 0,75 / 0.75 / 3/4 / -3/4 / −3/4 und Leerzeichen
+   (Abschnitt 8). Ungültige Eingaben ergeben null. */
+
+function parseEingabe(s) {
+  s = (s || '').replace(/\s+/g, '').replace(/-/g, '−');
+  if (s === '') return null;
+  let vorzeichen = false;
+  if (s.charAt(0) === '−') { vorzeichen = true; s = s.substr(1); }
+  if (s === '') return null;
+  const vf = vorzeichen ? -1 : 1;
+  const teile = s.split('/');
+  if (teile.length === 2) {
+    if (!/^\d+$/.test(teile[0]) || !/^\d+$/.test(teile[1])) return null;
+    const n = parseInt(teile[1], 10);
+    if (n === 0) return null;
+    return new Bruch(vf * parseInt(teile[0], 10), n);
+  }
+  if (teile.length > 2) return null;
+  if (!/^\d+([.,]\d+)?$/.test(s)) return null;
+  const komma = s.split(/[.,]/);
+  if (komma.length === 2) {
+    const z = parseInt(komma[0] + komma[1], 10);
+    return new Bruch(vf * z, Math.pow(10, komma[1].length));
+  }
+  return new Bruch(vf * parseInt(s, 10), 1);
+}
+
+/* Antwortprüfung mit Erkennung typischer Fehler (Abschnitt 11).
+   Rückgabe { richtig, hinweis }. */
+function pruefeAntwort(loesung, antwort) {
+  if (loesung.typ === 'eindeutig') {
+    if (antwort.typ === 'paar') {
+      const xR = bGleich(antwort.x, loesung.x);
+      const yR = bGleich(antwort.y, loesung.y);
+      if (xR && yR) return { richtig: true, hinweis: '' };
+      if (bGleich(antwort.x, loesung.x.neg()) && bGleich(antwort.y, loesung.y.neg()))
+        return { richtig: false, hinweis: 'Deine Werte sind genau negativ. Pass auf die Vorzeichen auf!' };
+      if (bGleich(antwort.x, loesung.y) && bGleich(antwort.y, loesung.x))
+        return { richtig: false, hinweis: 'x und y sind bei dir vertauscht.' };
+      if (xR || yR)
+        return { richtig: false, hinweis: 'Ein Wert stimmt schon! Hast du den zweiten Wert richtig eingesetzt?' };
+      return { richtig: false, hinweis: 'Vergleiche deine Rechnung mit dem Lösungsweg.' };
+    }
+    return { richtig: false, hinweis: 'Hier gibt es genau eine Lösung – einen Schnittpunkt.' };
+  }
+  if (antwort.typ !== 'paar') {
+    if (antwort.typ === loesung.typ) return { richtig: true, hinweis: '' };
+    return { richtig: false, hinweis: loesung.typ === 'keine'
+      ? 'Es gibt gar keine Lösung.'
+      : 'Es gibt unendlich viele Lösungen.' };
+  }
+  return { richtig: false, hinweis: loesung.typ === 'keine'
+    ? 'Die Gleichungen passen nie zusammen – es gibt keine Lösung!'
+    : 'Beide Gleichungen beschreiben dieselbe Gerade – es gibt unendlich viele Lösungen!' };
+}
+
+/* ============================================================
+   7. Grafik – Pixelschrift, Sprites, Kacheln
+   ============================================================ */
+
+const SPIELLEINWAND = document.getElementById('spielfeld');
+const KONTEXT = SPIELLEINWAND.getContext('2d');
+KONTEXT.imageSmoothingEnabled = false;
+
+/* Ganzzahlig skaliert, pixeliert, zentriert (Abschnitt 4). */
+let MASSSTAB = 1;
+function anpassen() {
+  const moeglich = Math.min(
+    window.innerWidth / CONFIG.BREITE,
+    window.innerHeight / CONFIG.HOEHE
+  );
+  MASSSTAB = Math.max(1, Math.floor(moeglich));
+  SPIELLEINWAND.style.width = (CONFIG.BREITE * MASSSTAB) + 'px';
+  SPIELLEINWAND.style.height = (CONFIG.HOEHE * MASSSTAB) + 'px';
+}
+window.addEventListener('resize', anpassen);
+anpassen();
+
+/* ---------- 7.1 Eigene 8x8-Pixelschrift ----------
+   Jedes Zeichen: 8 Zeilen à 8 Bit, als 16 Hex-Zeichen.
+   Höchstes Bit einer Zeile = linke Spalte.
+   Enthält ä ö ü ß, −, |, ∧, { }, ( ) und Komma sowie die
+   Zeichen für die Mathematik der späteren Etappen. */
+const SCHRIFT = {
+  'A': '3844447C44444400', 'B': '7844447844447800', 'C': '3C40404040403C00',
+  'D': '7844444444447800', 'E': '7C40407840407C00', 'F': '7C40407840404000',
+  'G': '3C40404C44443C00', 'H': '4444447C44444400', 'I': '7C10101010107C00',
+  'J': '1C08080848483000', 'K': '4448507050484400', 'L': '4040404040407C00',
+  'M': '446C544444444400', 'N': '4464544C44444400', 'O': '3844444444443800',
+  'P': '7844447840404000', 'Q': '3844444444443C04', 'R': '7844447850484400',
+  'S': '3C40403804047800', 'T': '7C10101010101000', 'U': '4444444444443800',
+  'V': '4444444444281000', 'W': '44444454546C4400', 'X': '4444281028444400',
+  'Y': '4444281010101000', 'Z': '7C04081020407C00',
+  'Ä': '443844447C444444', 'Ö': '443C40404040403C', 'Ü': '4444444444444438',
+  'a': '0000380438443800', 'b': '4040784444447800', 'c': '0000384040403800',
+  'd': '04043C4444443C00', 'e': '000038447C403800', 'f': '1810107010101000',
+  'g': '003C44443C043800', 'h': '4040784444444400', 'i': '1000101010101000',
+  'j': '0800080808080818', 'k': '4040485070504800', 'l': '1010101010101800',
+  'm': '0000685454545400', 'n': '0000784444444400', 'o': '0000384444443800',
+  'p': '0078444478404000', 'q': '003C44443C040400', 'r': '0000784440404000',
+  's': '00003C4038047800', 't': '1010701010101800', 'u': '0000444444443C00',
+  'v': '0000444444281000', 'w': '0000545454542800', 'x': '0000444428444400',
+  'y': '004444443C043800', 'z': '00007C0810207C00',
+  'ä': '0028380438443800', 'ö': '0028384444443800', 'ü': '0028444444443C00',
+  'ß': '3048483028302020',
+  '0': '3844444444443800', '1': '1030101010103800', '2': '3844081020407C00',
+  '3': '3844043804443800', '4': '4444447C04040400', '5': '7C40780404443800',
+  '6': '3840784444443800', '7': '7C04081020202000', '8': '3844443844443800',
+  '9': '3844443C04043800',
+  ' ': '0000000000000000', '.': '0000000000001000', ',': '0000000000102000',
+  '!': '1010101010001000', '?': '3844040810001000', ':': '0000100000001000',
+  ';': '0000100000102000', '-': '0000000038000000', '−': '000000007C000000',
+  '+': '0000001038100000', '=': '0000003800380000', '(': '1020202020201000',
+  ')': '1008080808081000', '{': '0810102010100800', '}': '1008080408081000',
+  '[': '3020202020203000', ']': '1808080808081800', '|': '1010101010101000',
+  '∧': '1028284444820000', '·': '0000001000000000', '²': '1808101800000000',
+  '/': '0408102040000000', '*': '0000281028000000', '"': '4444000000000000',
+  "'": '1010000000000000', '<': '0000081020100800', '>': '0000201008102000',
+  '✓': '0004020106083040', '→': '0000027E02000000',
+  '▲': '001C3E7FFF000000', '▼': '000000FF7F3E1C00'
+};
+
+const glyphenCache = new Map();
+function glyphe(zeichen, farbe) {
+  const schluessel = zeichen + '|' + farbe;
+  if (glyphenCache.has(schluessel)) return glyphenCache.get(schluessel);
+  const c = document.createElement('canvas');
+  c.width = 8; c.height = 8;
+  const g = c.getContext('2d');
+  const hex = SCHRIFT[zeichen] || SCHRIFT['?'];
+  g.fillStyle = PALETTE[farbe];
+  for (let zeile = 0; zeile < 8; zeile++) {
+    const bits = parseInt(hex.substr(zeile * 2, 2), 16);
+    for (let spalte = 0; spalte < 8; spalte++) {
+      if (bits & (0x80 >> spalte)) g.fillRect(spalte, zeile, 1, 1);
+    }
+  }
+  glyphenCache.set(schluessel, c);
+  return c;
+}
+
+function zeichneText(g, text, x, y, farbe, skala) {
+  farbe = (farbe === undefined) ? WEISS : farbe;
+  skala = skala || 1;
+  for (let i = 0; i < text.length; i++) {
+    g.drawImage(glyphe(text[i], farbe), x + i * 8 * skala, y, 8 * skala, 8 * skala);
+  }
+}
+function textBreite(text, skala) { return text.length * 8 * (skala || 1); }
+function zeichneTextMitte(g, text, y, farbe, skala) {
+  zeichneText(g, text, Math.floor((CONFIG.BREITE - textBreite(text, skala)) / 2), y, farbe, skala);
+}
+
+/* ---------- 7.2 Sprites ----------
+   Pixel-Arrays: '.' = durchsichtig, '0'-'9'/'a'-'v' = Palettenindex. */
+function zeichenIndex(zeichen) {
+  const code = zeichen.charCodeAt(0);
+  if (code >= 48 && code <= 57) return code - 48;   // '0'-'9'
+  return 10 + (code - 97);                          // 'a'-'o'
+}
+function spriteErzeugen(zeilen) {
+  const c = document.createElement('canvas');
+  c.width = zeilen[0].length; c.height = zeilen.length;
+  const g = c.getContext('2d');
+  for (let y = 0; y < zeilen.length; y++) {
+    for (let x = 0; x < zeilen[y].length; x++) {
+      const zeichen = zeilen[y][x];
+      if (zeichen === '.') continue;
+      g.fillStyle = PALETTE[zeichenIndex(zeichen)];
+      g.fillRect(x, y, 1, 1);
+    }
+  }
+  return c;
+}
+function zeichneSprite(g, spr, x, y, spiegeln, skala) {
+  skala = skala || 1;
+  x = Math.round(x); y = Math.round(y);
+  const b = spr.width * skala, h = spr.height * skala;
+  if (spiegeln) {
+    g.save(); g.translate(x + b, y); g.scale(-1, 1);
+    g.drawImage(spr, 0, 0, b, h);
+    g.restore();
+  } else {
+    g.drawImage(spr, x, y, b, h);
+  }
+}
+
+/* Mira, die Wegfinderin: 16x16, vier Blickrichtungen, zwei Laufphasen.
+   Modern Retro: drei Töne je Fläche (Licht oben links, Schatten unten
+   rechts), Kontur in dunkler Sprite-Farbe statt reinem Schwarz. */
+const MIRA_KOPF_UNTEN = [
+  '....kkkkkkkk....',
+  '...kpsjjjjjjk...',
+  '..kpjjjjjjjjjk..',
+  '..kjjjjjjjjjjk..',
+  '..kjiiiiiiipjk..',
+  '..kji4iiii4pjk..',
+  '..kjiiiiiiipjk..',
+  '...kiiiiiiipk...'
+];
+const MIRA_KOPF_OBEN = [
+  '....kkkkkkkk....',
+  '...kpsjjjjjjk...',
+  '..kpjjjjjjjjjk..',
+  '..kjjjjjjjjjjk..',
+  '..kjjjjjjjjjjk..',
+  '..kjjjjjjjjjjk..',
+  '..kjjjjjjjjjjk..',
+  '...kjjjjjjjjk...'
+];
+const MIRA_KOPF_LINKS = [
+  '....kkkkkkkk....',
+  '...kpsjjjjjjk...',
+  '..kpjjjjjjjjjk..',
+  '..kjjjjjjjjjjk..',
+  '..kiiiiiipjjjk..',
+  '..ki4iiiipjjjk..',
+  '..kiiiiiipjjjk..',
+  '...kiiiiipjjk...'
+];
+const MIRA_KOERPER = [
+  '....75555556....',
+  '...i75555556p...',
+  '...i75555556p...',
+  '...5555555666...'
+];
+const MIRA_KOERPER_LINKS = [
+  '....75555556....',
+  '...i75555556....',
+  '...i75555556....',
+  '...5555555666...'
+];
+const MIRA_BEINE_0 = [
+  '.....ip..ip.....',
+  '.....ip..ip.....',
+  '.....jk..jk.....',
+  '.....jk..jk.....'
+];
+const MIRA_BEINE_1 = [
+  '....ip....ip....',
+  '....ip....ip....',
+  '....jk....jk....',
+  '....jk....jk....'
+];
+function miraBild(blickKopf, koerper, beine) {
+  return spriteErzeugen(blickKopf.concat(koerper, beine));
+}
+const MIRA = {
+  unten: [miraBild(MIRA_KOPF_UNTEN, MIRA_KOERPER, MIRA_BEINE_0),
+          miraBild(MIRA_KOPF_UNTEN, MIRA_KOERPER, MIRA_BEINE_1)],
+  oben:  [miraBild(MIRA_KOPF_OBEN, MIRA_KOERPER, MIRA_BEINE_0),
+          miraBild(MIRA_KOPF_OBEN, MIRA_KOERPER, MIRA_BEINE_1)],
+  links: [miraBild(MIRA_KOPF_LINKS, MIRA_KOERPER_LINKS, MIRA_BEINE_0),
+          miraBild(MIRA_KOPF_LINKS, MIRA_KOERPER_LINKS, MIRA_BEINE_1)]
+  /* Blickrichtung 'rechts' wird beim Zeichnen gespiegelt. */
+};
+
+/* Monster: eigene Sprites je Gebiet (Abschnitt 6). */
+const KUNST_WIESENSCHRECK = [
+  '................', '................', '................',
+  '................', '................',
+  '....b......b....',
+  '.....d....d.....',
+  '....dbccccbd....',
+  '...dbccccccbd...',
+  '..db10cccc10cd..',
+  '..dbcccccccccd..',
+  '..dccccccccccd..',
+  '...dccccccccd...',
+  '....ddccccdd....',
+  '...jk..jk..jk...',
+  '...jk..jk..jk...'
+];
+const KUNST_PILZGEIST = [
+  '................', '................', '................',
+  '................', '................', '................',
+  '................',
+  '................',
+  '.....kppppk.....',
+  '....kp9jjj9k....',
+  '...kp9jjjj9jk...',
+  '..kjjjjjjjjjjk..',
+  '...iiiiiiiipp...',
+  '....i10ii10p....',
+  '.....iiiiip.....',
+  '......iipp......'
+];
+const KUNST_SCHLICKSCHLEIM = [
+  '................', '................', '................',
+  '................', '................', '................',
+  '................', '................', '................',
+  '....hfgggggh....',
+  '...hfgggggggh...',
+  '..hfg10ggg10gh..',
+  '..hggggggggggh..',
+  '..hhgggggggghh..',
+  '...hhhhhhhhhh...',
+  '....hhhhhhhh....'
+];
+const KUNST_FLEDERWICHT = [
+  '................', '................', '................',
+  '................', '................', '................',
+  '...2........2...',
+  '..42.233332.24..',
+  '.42233333333344.',
+  '.42313333331334.',
+  '.4.3333333333.4.',
+  '.44..333333..44.',
+  '..4...3333...4..',
+  '................',
+  '................',
+  '................'
+];
+const KUNST_WIRRZAUBERER = [
+  '................',
+  '................',
+  '.....onnnso.....',
+  '....onnnnnno....',
+  '...onnnnooooo...',
+  '..onnnnooooooo..',
+  '..onnnnooooooo..',
+  '...iiiiiiiipp...',
+  '...i4iiiiii4p...',
+  '...iiiiiiiipp...',
+  '..onnnnooooooo..',
+  '..on4oooooo4no..',
+  '..onnnnooooooo..',
+  '.onnnnooooooooo.',
+  '.roooooooooooor.',
+  '..oo.oo..oo.oo..'
+];
+const MONSTER_SPRITES = {
+  wiese:  spriteErzeugen(KUNST_WIESENSCHRECK),
+  wald:   spriteErzeugen(KUNST_PILZGEIST),
+  sumpf:  spriteErzeugen(KUNST_SCHLICKSCHLEIM),
+  hoehle: spriteErzeugen(KUNST_FLEDERWICHT),
+  burg:   spriteErzeugen(KUNST_WIRRZAUBERER)
+};
+
+/* Gegenstände (8x8-Icons für Karte und HUD) und Herzen. */
+const ICONS = {
+  'Fernrohr': spriteErzeugen([
+    '.....88.', '....jj88', '...jjj8.', '..jjj8..',
+    '.jjj8...', '.jj8....', '.98.....', '........'
+  ]),
+  'Schwert': spriteErzeugen([
+    '......22', '.....222', '....222.', '...222..',
+    '..222...', '.99.....', '..j.....', '........'
+  ]),
+  'Bumerang': spriteErzeugen([
+    'jj....jj', 'jj....jj', '.jj..jj.', '..jjjj..',
+    '...jj...', '........', '........', '........'
+  ]),
+  'Hammer': spriteErzeugen([
+    '.222222.', '.222222.', '...jj...', '...jj...',
+    '...jj...', '...jj...', '...jj...', '........'
+  ])
+};
+/* Herzen in drei Tönen: volles Herz mit Glanzpunkt,
+   leeres Herz mit Innenschatten (Etappe „Modern Retro“). */
+const HERZ_FORM = [
+  '.75..56.', '7s555556', '55555556', '.555556.',
+  '..5556..', '...56...', '....6...', '........'
+];
+const HERZ_LEER_FORM = [
+  '.44..44.', '44444444', '4rrrrrr4', '.4rrrr4.',
+  '..4rr4..', '...44...', '....4...', '........'
+];
+const HERZ_VOLL = spriteErzeugen(HERZ_FORM);
+const HERZ_LEER = spriteErzeugen(HERZ_LEER_FORM);
+
+/* ---------- 7.3 Kacheln (16x16, je Gebiet eigene Farben) ----------
+   Die Kacheln werden einmal pro (Gebiet, Kachelcode) in ein kleines
+   Canvas vorgerendert und dann nur noch kopiert. */
+function rauschen(x, y, samen) {
+  const n = Math.sin(x * 127.1 + y * 311.7 + samen * 74.7) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+/* Dezentes Schachbrett-Dithering für weiche Verläufe („Modern Retro“). */
+function dither(g, x, y, b, h, farbe, phase) {
+  g.fillStyle = farbe;
+  const p = phase || 0;
+  for (let j = 0; j < h; j++) {
+    for (let i = 0; i < b; i++) {
+      if (((x + i + y + j + p) & 1) === 0) g.fillRect(x + i, y + j, 1, 1);
+    }
+  }
+}
+
+/* Weicher Rand zu Nachbarböden: 2 Pixel Dithering
+   (maske: 1 = oben, 2 = rechts, 4 = unten, 8 = links). */
+function randWeich(g, maske, farbe, farbeHell) {
+  if (maske & 1) { dither(g, 0, 0, 16, 2, farbe); dither(g, 0, 0, 16, 1, farbeHell, 1); }
+  if (maske & 4) { dither(g, 0, 14, 16, 2, farbe); dither(g, 0, 15, 16, 1, farbeHell, 1); }
+  if (maske & 8) { dither(g, 0, 0, 2, 16, farbe); dither(g, 0, 0, 1, 16, farbeHell, 1); }
+  if (maske & 2) { dither(g, 14, 0, 2, 16, farbe); dither(g, 15, 0, 1, 16, farbeHell, 1); }
+}
+
+/* Baum: drei Töne, Lichtkante oben links, Schatten unten rechts. */
+function baumMalen(g, hell, mitte, dunkel, stamm, stammDunkel, y0) {
+  const breiten = [6, 8, 10, 12, 12, 12, 12, 10, 8, 6];
+  /* 1. Kronenschatten (bleibt unten rechts sichtbar) */
+  g.fillStyle = dunkel;
+  for (let i = 0; i < breiten.length; i++) {
+    g.fillRect(8 - breiten[i] / 2, y0 + i, breiten[i], 1);
+  }
+  /* 2. Mitteltere: rechts 2 Pixel und unten 2 Zeilen Schatten lassen */
+  g.fillStyle = mitte;
+  for (let i = 0; i < breiten.length - 2; i++) {
+    g.fillRect(8 - breiten[i] / 2, y0 + i, breiten[i] - 2, 1);
+  }
+  /* 3. Lichtkante oben links */
+  g.fillStyle = hell;
+  g.fillRect(6, y0, 2, 1); g.fillRect(5, y0 + 1, 2, 1);
+  g.fillRect(4, y0 + 2, 3, 1); g.fillRect(3, y0 + 3, 3, 1);
+  g.fillRect(3, y0 + 4, 2, 1);
+  /* 4. Glanzpunkte */
+  g.fillStyle = PALETTE[GLANZ];
+  g.fillRect(7, y0 + 1, 1, 1); g.fillRect(5, y0 + 3, 1, 1);
+  /* 5. Stamm: Lichtkante links, Schattenseite rechts */
+  g.fillStyle = stamm; g.fillRect(7, y0 + 10, 1, 16 - (y0 + 10));
+  g.fillStyle = stammDunkel; g.fillRect(8, y0 + 10, 1, 16 - (y0 + 10));
+}
+
+function torMalen(g, frame) {
+  /* Zaubertor: blockiert den Durchgang, bis das Gebiet geschafft ist.
+     Pfosten mit Facette, Zauberfeld flimmert (2 Frames). */
+  const F = PALETTE;
+  const fr = frame || 0;
+  g.fillStyle = F[GRAU];      g.fillRect(2, 1, 3, 14); g.fillRect(11, 1, 3, 14);
+  g.fillStyle = F[HELLGRAU]; g.fillRect(2, 1, 3, 1); g.fillRect(2, 2, 1, 13);
+  g.fillRect(11, 1, 3, 1); g.fillRect(11, 2, 1, 13);
+  g.fillStyle = F[DUNKELGRAU]; g.fillRect(4, 2, 1, 13); g.fillRect(13, 2, 1, 13);
+  g.fillRect(2, 14, 3, 1); g.fillRect(11, 14, 3, 1);
+  g.fillStyle = F[VIOLETT];
+  for (let y = 3; y < 15; y += 2) g.fillRect(6, y, 4, 1);
+  g.fillStyle = F[DUNKELVIOLETT];
+  for (let y = 4; y < 15; y += 2) g.fillRect(7, y, 2, 1);
+  /* Funkeln wandert mit dem Animationsframe */
+  g.fillStyle = F[GLANZ];
+  if (fr & 1) { g.fillRect(6, 8, 1, 1); g.fillRect(8, 13, 1, 1); }
+  else { g.fillRect(7, 5, 1, 1); g.fillRect(6, 11, 1, 1); }
+}
+
+/* Fackel an Wänden (Höhle, Burg): Flackern über 3 Frames, ohne Zufall. */
+function fackelMalen(g, fr) {
+  const F = PALETTE;
+  g.fillStyle = F[BRAUN]; g.fillRect(7, 9, 2, 3);
+  g.fillStyle = F[DUNKELBRAUN]; g.fillRect(7, 11, 2, 1);
+  g.fillStyle = F[ORANGE];
+  g.fillRect(7, 4 - (fr === 2 ? 1 : 0), 2, 4 + (fr === 1 ? 1 : 0));
+  g.fillStyle = F[GELB];
+  g.fillRect(7, 6 - (fr === 2 ? 1 : 0), 2, 2);
+  g.fillStyle = F[GLANZ];
+  g.fillRect(7 + (fr & 1), 4 - (fr === 2 ? 1 : 0), 1, 1);
+}
+function malKachel(g, gebietId, code, variante, frame, maske) {
+  const F = PALETTE;
+  const v = variante || 0;      /* Bodenvariante: fest pro Kachelposition */
+  const fr = frame || 0;       /* Animationsframe (Gras, Wasser, Fackeln …) */
+  const m = maske || 0;        /* weiche Ränder zu Wegen und Wasser */
+  const fleck = function (samen, dichte, farbe) {
+    g.fillStyle = farbe;
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) {
+        if (rauschen(x, y, samen) < dichte) g.fillRect(x, y, 1, 1);
+      }
+    }
+  };
+
+  if (gebietId === 'wiese') {
+    const gras = function (dichte) {
+      g.fillStyle = F[GRUEN]; g.fillRect(0, 0, 16, 16);
+      /* weiche Flecken in drei Grüntönen, fest je Variante */
+      const schatten = [[1, 10], [9, 1], [2, 3], [10, 8]][v];
+      dither(g, schatten[0], schatten[1], 5, 4, F[DUNKELGRUEN]);
+      dither(g, schatten[0] + 2, schatten[1] + 2, 3, 2, F[GRUENMITTE]);
+      const licht = [[9, 11], [2, 6], [11, 12], [4, 2]][v];
+      dither(g, licht[0], licht[1], 4, 3, F[HELLGRUEN]);
+      fleck(10 + v, dichte || 0.04, F[DUNKELGRUEN]);
+      /* Grasbüschel, dessen Spitze sich wiegt (2 Frames) */
+      const bx = [[2, 4], [10, 9], [6, 12], [12, 3]][v];
+      g.fillStyle = F[DUNKELGRUEN];
+      g.fillRect(bx[0], bx[1], 1, 2);
+      g.fillRect(bx[0] + 2, bx[1] + 1, 1, 2);
+      g.fillRect(bx[0] + 1 + fr, bx[1] - 1, 1, 3);
+      g.fillStyle = F[GRUENMITTE];
+      g.fillRect(bx[0] + 1, bx[1] + 1, 1, 1);
+    };
+    if (code === '.') { gras(); }
+    else if (code === ',') { gras(0.07); }
+    else if (code === 'f') {
+      gras();
+      /* zwei Blumen: Blüten in drei Tönen mit Stiel */
+      const vers = [[0, 0], [1, 1], [0, 1], [1, 0]][v];
+      [[4, 4], [9, 7]].forEach(function (p, i) {
+        const x = p[0] + vers[i], y = p[1] + vers[1];
+        g.fillStyle = F[GRUENMITTE]; g.fillRect(x + 1, y + 3, 1, 3);
+        g.fillStyle = F[ROSA];
+        g.fillRect(x, y, 3, 1); g.fillRect(x - 1, y + 1, 5, 1); g.fillRect(x, y + 2, 3, 1);
+        g.fillStyle = F[HELLROSA]; g.fillRect(x, y, 1, 1); g.fillRect(x - 1, y + 1, 1, 1);
+        g.fillStyle = F[GELB]; g.fillRect(x + 1, y + 1, 1, 1);
+      });
+    }
+    else if (code === 'o') { gras(); baumMalen(g, F[HELLGRUEN], F[GRUEN], F[DUNKELGRUEN], F[BRAUN], F[DUNKELBRAUN], 2); }
+    else if (code === '#') {
+      g.fillStyle = F[DUNKELGRUEN]; g.fillRect(0, 0, 16, 16);
+      baumMalen(g, F[HELLGRUEN], F[GRUEN], F[DUNKELGRUEN], F[BRAUN], F[DUNKELBRAUN], 0);
+    }
+    else if (code === 'p') {
+      g.fillStyle = F[SAND]; g.fillRect(0, 0, 16, 16);
+      fleck(30 + v, 0.08, F[SANDMITTE]);
+      fleck(40 + v, 0.05, F[DUNKELBRAUN]);
+      fleck(50 + v, 0.03, F[HAUT]);
+      randWeich(g, m, F[GRUEN], F[DUNKELGRUEN]);
+    }
+    else if (code === 'x') { gras(); torMalen(g, fr); }
+    else { gras(); }
+
+  } else if (gebietId === 'wald') {
+    const boden = function () {
+      g.fillStyle = F[DUNKELGRAU]; g.fillRect(0, 0, 16, 16);
+      /* Moos in drei Tönen und Schattenflecken, fest je Variante */
+      const moos = [[2, 2], [9, 8], [4, 10], [11, 3]][v];
+      dither(g, moos[0], moos[1], 5, 4, F[DUNKELGRUEN]);
+      dither(g, moos[0] + 1, moos[1] + 1, 3, 2, F[GRUENMITTE]);
+      const schatten = [[9, 11], [1, 6], [12, 2], [5, 12]][v];
+      dither(g, schatten[0], schatten[1], 4, 3, F[NACHT]);
+      fleck(10 + v, 0.04, F[GRUENMITTE]);
+    };
+    if (code === '.') { boden(); }
+    else if (code === ',') { boden(); fleck(30 + v, 0.05, F[NACHT]); }
+    else if (code === 'b') {
+      boden();
+      /* Busch: Schatten unten rechts, Licht oben links */
+      const breiten = [4, 6, 8, 8, 6, 4];
+      g.fillStyle = F[DUNKELGRUEN];
+      for (let i = 0; i < breiten.length; i++) g.fillRect(8 - breiten[i] / 2, 9 + i, breiten[i], 1);
+      g.fillStyle = F[GRUEN];
+      for (let i = 0; i < breiten.length - 1; i++) g.fillRect(8 - breiten[i] / 2, 9 + i, breiten[i] - 1, 1);
+      g.fillStyle = F[HELLGRUEN]; g.fillRect(7, 9, 2, 1); g.fillRect(6, 10, 2, 1);
+      /* Glanzpunkt wandert (2 Frames) */
+      g.fillStyle = F[GLANZ]; g.fillRect(fr & 1 ? 6 : 7, fr & 1 ? 11 : 10, 1, 1);
+    }
+    else if (code === 'o') { boden(); baumMalen(g, F[HELLGRUEN], F[GRUEN], F[DUNKELGRUEN], F[BRAUN], F[DUNKELBRAUN], 2); }
+    else if (code === '#') {
+      g.fillStyle = F[DUNKELGRAU]; g.fillRect(0, 0, 16, 16);
+      baumMalen(g, F[HELLGRUEN], F[GRUEN], F[DUNKELGRUEN], F[BRAUN], F[DUNKELBRAUN], 0);
+    }
+    else if (code === 'p') {
+      g.fillStyle = F[SAND]; g.fillRect(0, 0, 16, 16);
+      fleck(30 + v, 0.08, F[SANDMITTE]);
+      fleck(40 + v, 0.05, F[DUNKELBRAUN]);
+      fleck(50 + v, 0.03, F[HAUT]);
+      randWeich(g, m, F[DUNKELGRAU], F[DUNKELGRUEN]);
+    }
+    else if (code === 'x') { boden(); torMalen(g, fr); }
+    else { boden(); }
+
+  } else if (gebietId === 'sumpf') {
+    const schlamm = function () {
+      g.fillStyle = F[SAND]; g.fillRect(0, 0, 16, 16);
+      const schatten = [[1, 9], [8, 2], [3, 3], [11, 10]][v];
+      dither(g, schatten[0], schatten[1], 5, 4, F[SANDMITTE]);
+      dither(g, schatten[0] + 2, schatten[1] + 2, 3, 2, F[BRAUN]);
+      fleck(10 + v, 0.05, F[BRAUN]);
+      fleck(20 + v, 0.03, F[DUNKELGRUEN]);
+      fleck(30 + v, 0.03, F[HAUT]);
+    };
+    if (code === '.') { schlamm(); }
+    else if (code === ',') { schlamm(); fleck(40 + v, 0.06, F[SANDMITTE]); }
+    else if (code === '~') {
+      /* Wasser: drei Blautöne mit weicher Uferkante */
+      g.fillStyle = F[BLAU]; g.fillRect(0, 0, 16, 16);
+      fleck(50 + v, 0.10, F[DUNKELBLAU]);
+      dither(g, 0, 13, 16, 3, F[DUNKELBLAU]);
+      /* Wellen wandern, Glitzerpunkt wechselt (2 Frames) */
+      g.fillStyle = F[HELLBLAU];
+      g.fillRect(1 + v + fr, 3, 3, 1); g.fillRect(9 - v - fr, 7, 3, 1); g.fillRect(4 + v + fr, 11, 3, 1);
+      g.fillStyle = F[GLANZ];
+      g.fillRect(fr ? 11 : 3, fr ? 9 : 5, 1, 1);
+      /* Ufer: Schlamm-Dithering außen, helle Wasserlinie innen */
+      if (m & 1) {
+        dither(g, 0, 0, 16, 2, F[SANDMITTE]); dither(g, 0, 0, 16, 1, F[SAND], 1);
+        g.fillStyle = F[HELLBLAU];
+        for (let x = 1; x < 15; x += 2) g.fillRect(x, 2, 1, 1);
+      }
+      if (m & 4) {
+        dither(g, 0, 14, 16, 2, F[SANDMITTE]); dither(g, 0, 15, 16, 1, F[SAND], 1);
+        g.fillStyle = F[HELLBLAU];
+        for (let x = 1; x < 15; x += 2) g.fillRect(x, 13, 1, 1);
+      }
+      if (m & 8) {
+        dither(g, 0, 0, 2, 16, F[SANDMITTE]); dither(g, 0, 0, 1, 16, F[SAND], 1);
+        g.fillStyle = F[HELLBLAU];
+        for (let y = 1; y < 15; y += 2) g.fillRect(2, y, 1, 1);
+      }
+      if (m & 2) {
+        dither(g, 14, 0, 2, 16, F[SANDMITTE]); dither(g, 15, 0, 1, 16, F[SAND], 1);
+        g.fillStyle = F[HELLBLAU];
+        for (let y = 1; y < 15; y += 2) g.fillRect(13, y, 1, 1);
+      }
+    }
+    else if (code === 'o') {
+      schlamm();
+      /* Schilf: Lichtkante, Schatten, Kolben mit Glanz */
+      [3, 7, 11].forEach(function (x, i) {
+        g.fillStyle = F[DUNKELGRUEN]; g.fillRect(x, 4, 1, 11);
+        g.fillStyle = F[GRUENMITTE];  g.fillRect(x - 1, 6 + i * 3, 1, 3);
+        g.fillStyle = F[BRAUN];       g.fillRect(x, 1, 1, 3);
+        g.fillStyle = F[HAUT];        g.fillRect(x, 1, 1, 1);
+      });
+    }
+    else if (code === '#') {
+      g.fillStyle = F[DUNKELGRUEN]; g.fillRect(0, 0, 16, 16);
+      [1, 4, 7, 10, 13].forEach(function (x) {
+        g.fillStyle = F[GRUEN]; g.fillRect(x, 2, 1, 14);
+        g.fillStyle = F[GRUENMITTE]; g.fillRect(x, 2, 1, 2);
+      });
+      [1, 7, 13].forEach(function (x) {
+        g.fillStyle = F[BRAUN]; g.fillRect(x, 0, 1, 4);
+        g.fillStyle = F[HAUT]; g.fillRect(x, 0, 1, 1);
+      });
+    }
+    else if (code === 'p') {
+      /* Bohlenweg: Planken mit Lichtkante und Schattenfugen */
+      g.fillStyle = F[BRAUN]; g.fillRect(0, 0, 16, 16);
+      g.fillStyle = F[DUNKELBRAUN];
+      [3, 7, 11, 15].forEach(function (y) { g.fillRect(0, y, 16, 1); });
+      g.fillRect(2, 1, 1, 1); g.fillRect(13, 1, 1, 1);
+      g.fillRect(2, 5, 1, 1); g.fillRect(13, 9, 1, 1);
+      [0, 4, 8, 12].forEach(function (y) { dither(g, 0, y, 16, 1, F[HAUT], 1); });
+      randWeich(g, m, F[SAND], F[SANDMITTE]);
+    }
+    else if (code === 'x') { schlamm(); torMalen(g, fr); }
+    else { schlamm(); }
+
+  } else if (gebietId === 'hoehle') {
+    const boden = function () {
+      g.fillStyle = F[GRAU]; g.fillRect(0, 0, 16, 16);
+      const schatten = [[2, 9], [9, 2], [4, 4], [11, 11]][v];
+      dither(g, schatten[0], schatten[1], 5, 4, F[DUNKELGRAU]);
+      dither(g, schatten[0] + 1, schatten[1] + 1, 3, 2, F[NACHT]);
+      fleck(10 + v, 0.05, F[DUNKELGRAU]);
+      fleck(20 + v, 0.03, F[HELLGRAU]);
+    };
+    if (code === '.') { boden(); }
+    else if (code === ',') { boden(); fleck(30 + v, 0.06, F[NACHT]); }
+    else if (code === 'o') {
+      boden();
+      /* Fels: Licht oben links, Risse unten rechts */
+      const breiten = [6, 8, 10, 12, 12, 12, 10, 8];
+      g.fillStyle = F[DUNKELGRAU];
+      for (let i = 0; i < breiten.length; i++) g.fillRect(8 - breiten[i] / 2, 4 + i, breiten[i], 1);
+      g.fillStyle = F[GRAU];
+      for (let i = 0; i < breiten.length - 1; i++) g.fillRect(8 - breiten[i] / 2, 4 + i, breiten[i] - 2, 1);
+      g.fillStyle = F[HELLGRAU];
+      g.fillRect(6, 4, 3, 1); g.fillRect(5, 5, 3, 1); g.fillRect(4, 6, 2, 1);
+      g.fillStyle = F[WEISS]; g.fillRect(6, 5, 1, 1);
+      g.fillStyle = F[NACHT]; g.fillRect(9, 9, 1, 2); g.fillRect(6, 10, 2, 1);
+    }
+    else if (code === '#') {
+      g.fillStyle = F[DUNKELGRAU]; g.fillRect(0, 0, 16, 16);
+      g.fillStyle = F[HELLGRAU]; g.fillRect(0, 0, 16, 1);
+      dither(g, 0, 1, 16, 2, F[GRAU]);
+      g.fillStyle = F[NACHT];
+      g.fillRect(3, 4, 1, 3); g.fillRect(9, 8, 1, 4); g.fillRect(13, 2, 1, 2);
+      g.fillRect(0, 15, 16, 1);
+      /* Fackel auf manchen Wandkacheln: flackert über 3 Frames */
+      if (v === 0) fackelMalen(g, fr);
+    }
+    else if (code === 'p') {
+      g.fillStyle = F[HELLGRAU]; g.fillRect(0, 0, 16, 16);
+      fleck(30 + v, 0.08, F[GRAU]);
+      fleck(40 + v, 0.02, F[WEISS]);
+      randWeich(g, m, F[GRAU], F[DUNKELGRAU]);
+    }
+    else if (code === 'f') {
+      boden();
+      /* Kristalle: Lichtkante links, Schattenbasis, Glanzspitze pulsiert */
+      [[4, 8, 4], [8, 6, 6], [11, 9, 3]].forEach(function (k) {
+        g.fillStyle = F[HELLBLAU]; g.fillRect(k[0], k[1], 1, k[2]);
+        g.fillStyle = F[BLAU]; g.fillRect(k[0] + 1, k[1] + 1, 1, k[2] - 1);
+        g.fillStyle = F[DUNKELBLAU]; g.fillRect(k[0] + 1, k[1] + k[2] - 2, 1, 2);
+        if (fr & 1) { g.fillStyle = F[HELLBLAU]; g.fillRect(k[0] + 1, k[1] + 1, 1, 1); }
+        g.fillStyle = F[GLANZ]; g.fillRect(k[0], k[1] + (fr & 1 ? 2 : 1), 1, 1);
+      });
+    }
+    else if (code === 'x') { boden(); torMalen(g, fr); }
+    else { boden(); }
+
+  } else if (gebietId === 'burg') {
+    const boden = function () {
+      g.fillStyle = F[HELLGRAU]; g.fillRect(0, 0, 16, 16);
+      g.fillStyle = F[GRAU];
+      g.fillRect(0, 0, 16, 1); g.fillRect(0, 0, 1, 16);
+      fleck(10 + v, 0.04, F[GRAU]);
+      fleck(20 + v, 0.02, F[WEISS]);
+      /* Steinfliesen je Variante leicht abgedunkelt */
+      if (v === 1) dither(g, 8, 8, 8, 8, F[GRAU]);
+      if (v === 2) dither(g, 0, 8, 8, 8, F[GRAU]);
+    };
+    if (code === '.') { boden(); }
+    else if (code === ',') { boden(); }
+    else if (code === 'p') { boden(); fleck(30 + v, 0.02, F[WEISS]); }
+    else if (code === 'c') {
+      /* Teppich: Facette, Emblem mit Glanz und Schatten */
+      g.fillStyle = F[ROT]; g.fillRect(0, 0, 16, 16);
+      g.fillStyle = F[DUNKELROT];
+      g.fillRect(0, 0, 16, 1); g.fillRect(0, 15, 16, 1);
+      g.fillRect(0, 0, 1, 16); g.fillRect(15, 0, 1, 16);
+      dither(g, 1, 12, 14, 3, F[DUNKELROT]);
+      g.fillStyle = F[GELB];
+      [[7, 6], [8, 6], [6, 7], [9, 7], [6, 8], [9, 8], [7, 9], [8, 9]]
+        .forEach(function (p) { g.fillRect(p[0], p[1], 1, 1); });
+      /* Emblem schimmert (2 Frames) */
+      g.fillStyle = F[GLANZ]; g.fillRect(fr & 1 ? 8 : 7, 6, 1, 1);
+      g.fillStyle = F[GOLDMITTE]; g.fillRect(8, 9, 1, 1);
+    }
+    else if (code === 'o') {
+      boden();
+      g.fillStyle = F[GRAU];       g.fillRect(4, 0, 8, 16);
+      g.fillStyle = F[HELLGRAU];   g.fillRect(4, 0, 2, 16);
+      g.fillStyle = F[DUNKELGRAU]; g.fillRect(10, 0, 2, 16);
+      g.fillRect(2, 0, 12, 2); g.fillRect(2, 13, 12, 3);
+      g.fillStyle = F[NACHT]; g.fillRect(2, 15, 12, 1);
+    }
+    else if (code === '#') {
+      g.fillStyle = F[DUNKELGRAU]; g.fillRect(0, 0, 16, 16);
+      g.fillStyle = F[GRAU];
+      g.fillRect(0, 5, 16, 1); g.fillRect(0, 11, 16, 1);
+      g.fillRect(5, 0, 1, 5);  g.fillRect(11, 0, 1, 5);
+      g.fillRect(2, 6, 1, 5);  g.fillRect(8, 6, 1, 5);  g.fillRect(14, 6, 1, 5);
+      g.fillRect(5, 12, 1, 4); g.fillRect(11, 12, 1, 4);
+      g.fillStyle = F[HELLGRAU]; g.fillRect(0, 0, 16, 1);
+      g.fillStyle = F[NACHT];
+      g.fillRect(0, 15, 16, 1); g.fillRect(5, 4, 1, 1); g.fillRect(11, 4, 1, 1);
+      g.fillRect(2, 10, 1, 1); g.fillRect(8, 10, 1, 1); g.fillRect(14, 10, 1, 1);
+      /* Fackel auf manchen Wandkacheln: flackert über 3 Frames */
+      if (v === 0) fackelMalen(g, fr);
+    }
+    else { boden(); }
+  }
+}
+
+const KACHELN = {};
+
+/* Fest pro Kachelposition: Bodenvariante (zufällig, aber ohne Flimmern).
+   Wände bekommen 8 Varianten, damit Fackeln selten bleiben. */
+function kachelVariante(tx, ty, bi, n) {
+  return Math.floor(rauschen(tx * 3.13 + bi * 7.77, ty * 5.71, 511) * (n || 4));
+}
+
+/* Animationsframe pro Kachelcode: Gras wiegt sich, Wasser glitzert,
+   Kristalle pulsieren, Fackeln flackern – über wenige Frames,
+   ohne Zufall pro Frame. */
+function kachelFrame(code, tx, ty) {
+  const f = SPIEL.frame;
+  if (code === '#') return ((f >> 3) + tx * 2 + ty * 3) % 3;   /* Fackeln: 3 Frames */
+  if (code === '~') return ((f >> 3) + tx + ty * 2) & 1;        /* Wasser glitzert */
+  if (code === 'f' || code === 'b' || code === 'x' || code === 'c') {
+    return ((f >> 3) + tx * 2 + ty) & 1;                       /* Kristalle, Busch, Tor, Teppich */
+  }
+  return ((f >> 4) + tx * 2 + ty * 3) & 1;                     /* Gras wiegt sich */
+}
+
+/* Randmaske für weiche Übergänge zu Wegen und Wasser
+   (Bit 1 = oben, 2 = rechts, 4 = unten, 8 = links). */
+const RAND_BODEN = { '.': true, ',': true, 'f': true, 'b': true, 'c': true };
+function kachelRand(code, karte, tx, ty) {
+  if (code !== 'p' && code !== '~') return 0;
+  const amBoden = function (x, y) {
+    return x >= 0 && x < CONFIG.FELD_BREITE && y >= 0 && y < CONFIG.FELD_HOEHE
+      && RAND_BODEN[karte[y][x]] === true;
+  };
+  let maske = 0;
+  if (amBoden(tx, ty - 1)) maske |= 1;
+  if (amBoden(tx + 1, ty)) maske |= 2;
+  if (amBoden(tx, ty + 1)) maske |= 4;
+  if (amBoden(tx - 1, ty)) maske |= 8;
+  return maske;
+}
+
+/* Alle Kacheln werden je (Gebiet, Code, Variante, Frame, Rand) einmal in
+   ein Offscreen-Canvas vorgerendert und dann nur kopiert – so bleibt
+   das Spiel auch auf dem iPad schnell (Abschnitt 3). */
+function kachel(gebietId, code, variante, frame, maske) {
+  variante = variante || 0; frame = frame || 0; maske = maske || 0;
+  if (!KACHELN[gebietId]) KACHELN[gebietId] = {};
+  const bank = KACHELN[gebietId];
+  if (!bank[code]) bank[code] = {};
+  const key = (variante * 8 + frame) * 16 + maske;
+  if (!bank[code][key]) {
+    const c = document.createElement('canvas');
+    c.width = CONFIG.KACHEL; c.height = CONFIG.KACHEL;
+    malKachel(c.getContext('2d'), gebietId, code, variante, frame, maske);
+    bank[code][key] = c;
+  }
+  return bank[code][key];
+}
+
+/* ---------- 7.4 Koordinatensystem (grafisches Lösen, 9.2) ----------
+   128×128 Pixel, 1 Einheit = 8 px, Bereich −8 bis 8.
+   Modern Retro: Nebenlinien dezent, Hauptachsen deutlich, Geraden mit
+   1 px dunklerer Randlinie für gute Lesbarkeit (Schulbetrieb, iPad).
+   Je Aufgabenstellung einmal vorgerendert (Offscreen-Canvas). */
+const KOSYS_CACHE = new Map();
+function kosysMalen(g, gl1, gl2) {
+  const F = PALETTE;
+  g.fillStyle = F[WEISS]; g.fillRect(0, 0, 128, 128);
+  /* Nebenlinien: helles, dezentes Grau */
+  g.fillStyle = F[HELLGRAU];
+  for (let i = 0; i <= 16; i++) {
+    if (i === 8) continue;
+    g.fillRect(0, i * 8, 128, 1);
+    g.fillRect(i * 8, 0, 1, 128);
+  }
+  /* Hauptachsen: deutlich */
+  g.fillStyle = F[SCHWARZ];
+  g.fillRect(0, 64, 128, 1);
+  g.fillRect(64, 0, 1, 128);
+  /* Achsenbeschriftung alle 4 Einheiten */
+  for (let k = -8; k <= 8; k += 4) {
+    if (k === 0) continue;
+    const zx = 64 + k * 8, zy = 64 - k * 8;
+    const t = String(k).replace('-', '−');
+    const w = t.length * 8;
+    /* Zahl mit weißem Hintergrund, im Bild gehalten, abseits der Achse */
+    const tx = Math.max(0, Math.min(128 - w, zx - Math.floor(w / 2)));
+    const ty = Math.max(0, Math.min(120, zy - 4));
+    g.fillStyle = F[WEISS];
+    g.fillRect(tx, 66, w, 8);
+    g.fillRect(66, ty, w, 8);
+    zeichneText(g, t, tx, 66, GRAU);
+    zeichneText(g, t, 66, ty, GRAU);
+  }
+  /* Geraden: erst 1 px dunkle Randlinie, dann der klare Kern
+     (I rot, II blau) – so bleiben sie vor dem Gitter lesbar. */
+  const linie = function (gr, farbe, dunkel) {
+    if (gr.vertikal) {
+      const x = 64 + Math.round(gr.x.zahl() * 8);
+      g.fillStyle = F[dunkel]; g.fillRect(x - 1, 0, 3, 128);
+      g.fillStyle = F[farbe];  g.fillRect(x, 0, 1, 128);
+      return;
+    }
+    const mz = gr.m.zahl(), bz = gr.b.zahl();
+    const kern = [];
+    if (Math.abs(mz) <= 1) {
+      for (let i = -64; i <= 64; i++) {
+        const x = i * 0.125;
+        kern.push([64 + Math.round(x * 8), 64 - Math.round((bz + mz * x) * 8)]);
+      }
+    } else {
+      for (let i = -64; i <= 64; i++) {
+        const y = i * 0.125;
+        kern.push([64 + Math.round(((y - bz) / mz) * 8), 64 - Math.round(y * 8)]);
+      }
+    }
+    g.fillStyle = F[dunkel];
+    for (let i = 0; i < kern.length; i++) {
+      const x = kern[i][0], y = kern[i][1];
+      if (y >= 0 && y < 128) { g.fillRect(x - 1, y, 1, 1); g.fillRect(x + 1, y, 1, 1); }
+      if (x >= 0 && x < 128) { g.fillRect(x, y - 1, 1, 1); g.fillRect(x, y + 1, 1, 1); }
+    }
+    g.fillStyle = F[farbe];
+    for (let i = 0; i < kern.length; i++) {
+      const x = kern[i][0], y = kern[i][1];
+      if (x >= 0 && x < 128 && y >= 0 && y < 128) g.fillRect(x, y, 1, 1);
+    }
+  };
+  linie(geradeAus(gl1), ROT, DUNKELROT);
+  linie(geradeAus(gl2), BLAU, DUNKELBLAU);
+}
+function zeichneKoordinatensystem(g, links, oben, gl1, gl2) {
+  const key = glAnzeige(gl1) + ' § ' + glAnzeige(gl2);
+  let c = KOSYS_CACHE.get(key);
+  if (!c) {
+    c = document.createElement('canvas');
+    c.width = 128; c.height = 128;
+    kosysMalen(c.getContext('2d'), gl1, gl2);
+    if (KOSYS_CACHE.size > 16) KOSYS_CACHE.clear();   /* Cache klein halten */
+    KOSYS_CACHE.set(key, c);
+  }
+  g.drawImage(c, links, oben);
+}
+
+/* ---------- 7.5 Schatten, Glanz und Partikel (rein optisch) ----------
+   Schattenflecken unter den Figuren, wandernde Glanzpunkte auf
+   Gegenständen und bis zu 40 Pixel-Partikel: Funken bei Treffern,
+   Staub beim Laufen, kleine Herzen beim Aufsammeln, Sternchen beim
+   Sieg. Alles wird nur in den Zeichenfunktionen erzeugt und gezeichnet,
+   die Spiellogik bleibt unangetastet. */
+
+/* Weicher Schattenfleck unter einer Figur (2 Zeilen, abgerundet). */
+function schattenZeichnen(g, xMittig, yBoden, breite) {
+  const x = Math.round(xMittig - breite / 2), y = Math.round(yBoden);
+  g.fillStyle = 'rgba(26,20,36,0.30)';
+  g.fillRect(x, y, breite, 1);
+  g.fillRect(x + 2, y + 1, breite - 4, 1);
+}
+
+/* Wandernder Glanzpunkt: läuft über die sichtbaren Pixel eines Sprites
+   (für Gegenstände). Wird je Sprite einmal berechnet und gecacht. */
+const GLANZ_PIXEL = new Map();
+function glitzerPixel(spr, frame) {
+  let px = GLANZ_PIXEL.get(spr);
+  if (px === undefined) {
+    const d = spr.getContext('2d').getImageData(0, 0, spr.width, spr.height).data;
+    px = [];
+    for (let y = 0; y < spr.height; y++) {
+      for (let x = 0; x < spr.width; x++) {
+        if (d[(y * spr.width + x) * 4 + 3] > 0) px.push([x, y]);
+      }
+    }
+    GLANZ_PIXEL.set(spr, px);
+  }
+  if (!px.length) return null;
+  const i = (frame >> 3) % (px.length * 2);
+  return i < px.length ? px[i] : null;
+}
+
+/* Partikel: maximal 40 gleichzeitig. art: 'punkt', 'staub', 'herz', 'stern'. */
+const PARTIKEL = [];
+function partikel(raum, x, y, vx, vy, dauer, farbe, art) {
+  if (PARTIKEL.length >= 40) PARTIKEL.shift();
+  PARTIKEL.push({
+    raum: raum, x: x, y: y, vx: vx, vy: vy,
+    leben: dauer, dauer: dauer, farbe: farbe, art: art || 'punkt'
+  });
+}
+function partikelTick() {
+  for (let i = PARTIKEL.length - 1; i >= 0; i--) {
+    const p = PARTIKEL[i];
+    p.x += p.vx; p.y += p.vy;
+    if (p.art === 'staub') { p.vy += 0.015; p.vx *= 0.94; }
+    else if (p.art === 'stern') { p.vx *= 0.93; p.vy *= 0.93; }
+    else if (p.art === 'herz') { p.vx *= 0.97; }
+    if (--p.leben <= 0) PARTIKEL.splice(i, 1);
+  }
+}
+function partikelZeichnen(g, raum) {
+  for (let i = 0; i < PARTIKEL.length; i++) {
+    const p = PARTIKEL[i];
+    if (p.raum !== raum) continue;
+    /* im letzten Drittel der Lebenszeit dezent blinken */
+    if (p.leben < p.dauer / 3 && (p.leben & 1)) continue;
+    const x = Math.round(p.x), y = Math.round(p.y);
+    g.fillStyle = PALETTE[p.farbe];
+    if (p.art === 'herz') {
+      g.fillRect(x, y, 1, 1); g.fillRect(x + 2, y, 1, 1);
+      g.fillRect(x, y + 1, 3, 1); g.fillRect(x + 1, y + 2, 1, 1);
+    } else if (p.art === 'stern') {
+      g.fillRect(x + 1, y, 1, 1); g.fillRect(x, y + 1, 1, 1);
+      g.fillRect(x + 2, y + 1, 1, 1); g.fillRect(x + 1, y + 2, 1, 1);
+    } else {
+      g.fillRect(x, y, 1, 1);
+    }
+  }
+}
+
+/* Optische Merker: erkennen Übergänge zwischen zwei gezeichneten
+   Frames (Herz aufgesammelt, Monster besiegt, Gegenstand mitgenommen)
+   und erzeugen passende Partikel. Kein Einfluss auf die Spiellogik. */
+const VISUELL = {
+  miraX: 0, miraY: 0,
+  letzteHerzen: null, letzteMonster: null, letzteGegenstaende: [],
+  kampfModus: '', letzterZustand: ''
+};
+function weltOptikPruefen(bi) {
+  const b = BILDSCHIRME[bi];
+  const gi = b.gebietIndex;
+  const gb = GEBIETE[gi];
+  const z = GEBIET_ZUSTAND[gi];
+  const y0 = CONFIG.HUD_HOEHE;
+  /* gefallenes Herz aufgesammelt → kleine Herzen steigen auf */
+  const herzen = z.herzFallen.filter(function (h) { return h.bildschirm === bi; })
+    .map(function (h) { return h.x + '|' + h.y; });
+  if (VISUELL.letzteHerzen !== null && herzen.length === VISUELL.letzteHerzen.length - 1) {
+    const weg = VISUELL.letzteHerzen.filter(function (k) { return herzen.indexOf(k) < 0; })[0];
+    if (weg) {
+      const teile = weg.split('|');
+      for (let i = 0; i < 4; i++) {
+        partikel('welt', (+teile[0]) + 4 + zg(-3, 3), y0 + (+teile[1]) + 4 + zg(-2, 0),
+          zg(-2, 2) / 15, -0.3 - Math.random() * 0.25, 24 + zg(0, 10), ROT, 'herz');
+      }
+    }
+  }
+  VISUELL.letzteHerzen = herzen;
+  /* Monster besiegt → Sternchen an seiner Stelle */
+  const monster = z.monster.filter(function (m) { return m.lebt; })
+    .map(function (m) { return Math.round(m.x) + '|' + Math.round(m.y); });
+  if (VISUELL.letzteMonster !== null && monster.length === VISUELL.letzteMonster.length - 1) {
+    const weg = VISUELL.letzteMonster.filter(function (k) { return monster.indexOf(k) < 0; })[0];
+    if (weg) {
+      const teile = weg.split('|');
+      for (let i = 0; i < 8; i++) {
+        const w = i / 8 * Math.PI * 2;
+        partikel('welt', (+teile[0]) + 8, y0 + (+teile[1]) + 8,
+          Math.cos(w) * 0.8, Math.sin(w) * 0.8 - 0.2, 26 + zg(0, 12),
+          i % 2 ? GELB : GLANZ, 'stern');
+      }
+    }
+  }
+  VISUELL.letzteMonster = monster;
+  /* Gegenstand eingesammelt → Glanzfunken an seiner Stelle */
+  if (gb.gegenstandName && z.gegenstandDraussen && z.gegenstandMitgenommen
+      && !VISUELL.letzteGegenstaende[gi] && gb.gegenstandPos.k === b.karteIndex) {
+    const p = gb.gegenstandPos;
+    for (let i = 0; i < 8; i++) {
+      partikel('welt', p.x * 16 + 8 + zg(-4, 4), y0 + p.y * 16 + 6 + zg(-4, 2),
+        zg(-2, 2) / 12, -0.2 - Math.random() * 0.3, 22 + zg(0, 10),
+        i % 2 ? GLANZ : GELB, 'stern');
+    }
+  }
+  VISUELL.letzteGegenstaende[gi] = z.gegenstandMitgenommen;
+}
+
+/* Dezente Vignette an den Bildschirmrändern: einmal vorgerendert,
+   keine Scanlines, keine Bildschirmkrümmung. */
+let VIGNETTE_CANVAS = null;
+function vignetteZeichnen(g) {
+  if (!VIGNETTE_CANVAS) {
+    VIGNETTE_CANVAS = document.createElement('canvas');
+    VIGNETTE_CANVAS.width = CONFIG.BREITE; VIGNETTE_CANVAS.height = CONFIG.HOEHE;
+    const vg = VIGNETTE_CANVAS.getContext('2d');
+    vg.fillStyle = 'rgba(26,20,36,0.18)';
+    vg.fillRect(0, 0, 256, 1); vg.fillRect(0, 239, 256, 1);
+    vg.fillRect(0, 0, 1, 240); vg.fillRect(255, 0, 1, 240);
+    vg.fillStyle = 'rgba(26,20,36,0.09)';
+    vg.fillRect(0, 1, 256, 1); vg.fillRect(0, 238, 256, 1);
+    vg.fillRect(1, 0, 1, 240); vg.fillRect(254, 0, 1, 240);
+    vg.fillStyle = 'rgba(26,20,36,0.04)';
+    vg.fillRect(0, 2, 256, 1); vg.fillRect(0, 237, 256, 1);
+    vg.fillRect(2, 0, 1, 240); vg.fillRect(253, 0, 1, 240);
+  }
+  g.drawImage(VIGNETTE_CANVAS, 0, 0);
+}
+
+/* ============================================================
+   8. Welt – Karten, Gebiete, Hindernisse
+   ============================================================
+   Jeder Bildschirm: 16x11 Kacheln, als 11 Zeichenketten.
+   Kachelcodes: '#' Rand/Wand, 'o' Baum/Fels (blockiert),
+   '~' Wasser (blockiert), 'x' Zaubertor (blockiert, bis das
+   Gebiet geschafft ist), 'p' Weg, '.'/',','f''b''c' Boden/Deko.
+   Übergänge zu Nachbarbildschirmen liegen in den Zeilen 4-6. */
+
+const KARTE_WIESE_0 = [
+  '################',
+  '#..o.......o...#',
+  '#..f...o......o#',
+  '#......o.......#',
+  '#........o....pp',
+  '#.............pp',
+  '#....o........pp',
+  '#.........o....#',
+  '#..f...o.......#',
+  '#......f....o..#',
+  '################'
+];
+const KARTE_WIESE_1 = [
+  '################',
+  '#...f.....o....#',
+  '#.....o........#',
+  '#..o.........f.#',
+  'p.............xp',
+  'ppppppppppppppxp',
+  'p.....o.......xp',
+  '#....o....f....#',
+  '#.........o....#',
+  '#.f.....o......#',
+  '################'
+];
+const KARTE_WALD_0 = [
+  '################',
+  '#.o..o....o..o.#',
+  '#..b....o......#',
+  '#....o.....b.o.#',
+  'p...b...o......p',
+  'pppppppppppppppp',
+  'p.....o...b....p',
+  '#..o....b..o...#',
+  '#.b....o.......#',
+  '#...o....o...b.#',
+  '################'
+];
+const KARTE_WALD_1 = [
+  '################',
+  '#..o....b...o..#',
+  '#....o.........#',
+  '#.b......o...b.#',
+  'p.............xp',
+  'ppppppppppppppxp',
+  'p...o....b....xp',
+  '#.....o........#',
+  '#..b.....o...o.#',
+  '#...o......b...#',
+  '################'
+];
+const KARTE_SUMPF_0 = [
+  '################',
+  '#.~~.......o...#',
+  '#~~....o....~..#',
+  '#...o......~~..#',
+  'p.....o........p',
+  'pppppppppppppppp',
+  'p...~~...o.....p',
+  '#.....o....~...#',
+  '#..~~.....o....#',
+  '#...o.....~~...#',
+  '################'
+];
+const KARTE_SUMPF_1 = [
+  '################',
+  '#...o.....~~...#',
+  '#.~~....o......#',
+  '#......o....~..#',
+  'p.............xp',
+  'ppppppppppppppxp',
+  'p..~....o.....xp',
+  '#....o.....o...#',
+  '#.~~.....o.....#',
+  '#...o...~~.....#',
+  '################'
+];
+const KARTE_HOEHLE_0 = [
+  '################',
+  '#..o......o....#',
+  '#......o.......#',
+  '#.o.......o....#',
+  'p.......o......p',
+  'pppppppppppppppp',
+  'p...o..........p',
+  '#......o...o...#',
+  '#..o.....o.....#',
+  '#.....o....o...#',
+  '################'
+];
+const KARTE_HOEHLE_1 = [
+  '################',
+  '#....o.....o...#',
+  '#..o........o..#',
+  '#......o.......#',
+  'p.............xp',
+  'ppppppppppppppxp',
+  'p....o........xp',
+  '#.o.......o....#',
+  '#....o.........#',
+  '#..o......o....#',
+  '################'
+];
+const KARTE_BURG_0 = [
+  '################',
+  '#......cc......#',
+  '#..o...cc...o..#',
+  '#......cc......#',
+  'p......cc......#',
+  'pppppppccpppppp#',
+  'p......cc......#',
+  '#..o...cc...o..#',
+  '#......cc......#',
+  '#..o........o..#',
+  '################'
+];
+
+/* Gebiete in fester Reihenfolge (Abschnitt 6).
+   monsterSpawns: k = Nummer des Bildschirms im Gebiet, x/y = Kachel. */
+const GEBIETE = [
+  {
+    id: 'wiese', name: 'WIESE',
+    karten: [KARTE_WIESE_0, KARTE_WIESE_1],
+    monsterSpawns: [{ k: 0, x: 4, y: 2 }, { k: 0, x: 9, y: 7 }, { k: 1, x: 8, y: 6 }],
+    verhalten: 'zufall', monsterName: 'Wiesenschreck',
+    gegenstandName: 'Fernrohr', gegenstandPos: { k: 1, x: 8, y: 2 },
+    text: 'Die Wiese von Lineara. Hier kreuzen sich die ersten Wege.',
+    gegenstandText: 'Das Fernrohr! Damit siehst du Kreuzungen schon von weitem.',
+    textWo: 'auf der Wiese'
+  },
+  {
+    id: 'wald', name: 'WALD',
+    karten: [KARTE_WALD_0, KARTE_WALD_1],
+    monsterSpawns: [{ k: 0, x: 5, y: 2 }, { k: 0, x: 11, y: 8 }, { k: 1, x: 7, y: 7 }],
+    verhalten: 'jagd', monsterName: 'Pilzgeist',
+    gegenstandName: 'Schwert', gegenstandPos: { k: 1, x: 8, y: 2 },
+    text: 'Im Wald haben sich die Pfade verirrt.',
+    gegenstandText: 'Das Schwert! Es schneidet durch jede Verwirrung.',
+    textWo: 'im Wald'
+  },
+  {
+    id: 'sumpf', name: 'SUMPF',
+    karten: [KARTE_SUMPF_0, KARTE_SUMPF_1],
+    monsterSpawns: [{ k: 0, x: 5, y: 2 }, { k: 0, x: 10, y: 7 }, { k: 1, x: 7, y: 6 }],
+    verhalten: 'zufall', monsterName: 'Schlickschleim',
+    gegenstandName: 'Bumerang', gegenstandPos: { k: 1, x: 10, y: 2 },
+    text: 'Der Sumpf verschleiert die Schnittpunkte.',
+    gegenstandText: 'Der Bumerang! Er findet jeden Weg zurück.',
+    textWo: 'im Sumpf'
+  },
+  {
+    id: 'hoehle', name: 'HÖHLE',
+    karten: [KARTE_HOEHLE_0, KARTE_HOEHLE_1],
+    monsterSpawns: [{ k: 0, x: 5, y: 2 }, { k: 0, x: 10, y: 7 }, { k: 1, x: 8, y: 7 }],
+    verhalten: 'jagd', monsterName: 'Flederwicht',
+    gegenstandName: 'Hammer', gegenstandPos: { k: 1, x: 8, y: 2 },
+    text: 'In der Höhle lauern die wirrsten Gleichungen.',
+    gegenstandText: 'Der Hammer! Er zerschlägt jede Blockade.',
+    textWo: 'in der Höhle'
+  },
+  {
+    id: 'burg', name: 'BURG',
+    karten: [KARTE_BURG_0],
+    monsterSpawns: [{ k: 0, x: 7, y: 1 }],
+    verhalten: 'jagd', monsterName: 'Der Wirrzauberer',
+    boss: true,
+    text: 'Die Burg des Wirrzauberers. Mut, Mira!'
+  }
+];
+
+/* Bildschirme flach hintereinander legen (Wiese 0, Wiese 1, Wald 0, ...). */
+const BILDSCHIRME = [];
+GEBIETE.forEach(function (gb, gebietIndex) {
+  gb.karten.forEach(function (karte, karteIndex) {
+    BILDSCHIRME.push({
+      gebiet: gb, gebietIndex: gebietIndex,
+      karteIndex: karteIndex, karte: karte
+    });
+  });
+});
+(function () {
+  let start = 0;
+  GEBIETE.forEach(function (gb) {
+    gb.startBildschirm = start;
+    start += gb.karten.length;
+  });
+})();
+
+/* Blockierte Kachelzeichen; 'x' (Zaubertor) zählt dazu, solange
+   das Gebiet noch nicht geschafft ist (siehe istBlockiert). */
+const BLOCKIERT = { '#': true, 'o': true, '~': true };
+
+function istBlockiert(bildschirmIndex, kx, ky) {
+  if (kx < 0 || kx >= CONFIG.FELD_BREITE || ky < 0 || ky >= CONFIG.FELD_HOEHE) return true;
+  const b = BILDSCHIRME[bildschirmIndex];
+  const code = b.karte[ky][kx];
+  if (BLOCKIERT[code]) return true;
+  if (code === 'x') {
+    /* Zaubertor: blockiert, bis das Gebiet geschafft ist. */
+    const zustand = GEBIET_ZUSTAND[b.gebietIndex];
+    return zustand ? !zustand.besiegt : true;
+  }
+  return false;
+}
+
+/* ============================================================
+   9. Figuren – Spielerin, Monster, Boss
+   ============================================================ */
+
+const SPIELER = {
+  bildschirm: 0,
+  x: 112, y: 80,            // Position in Pixeln (oberer linker Rand)
+  blick: 'unten',
+  schritt: 0, laufTimer: 0, schrittTimer: 12,
+  herzen: 3,               /* wird in neuesSpiel() je Niveau gesetzt */
+  unverwundbar: 0,          // Frames Unverwundbarkeit nach einem Kampf (Spiellogik)
+  blinkDauer: 0,            // Frames Blinken – nur nach einem Herzverlust
+  gegenstaende: []
+};
+
+/* Kollisionskasten am Fuß der Figur (etwas kleiner als das Sprite). */
+function platzFrei(bildschirmIndex, x, y) {
+  const bx = x + 3, by = y + 8, breite = 10, hoehe = 7;
+  const tx0 = Math.floor(bx / CONFIG.KACHEL),
+        tx1 = Math.floor((bx + breite - 1) / CONFIG.KACHEL),
+        ty0 = Math.floor(by / CONFIG.KACHEL),
+        ty1 = Math.floor((by + hoehe - 1) / CONFIG.KACHEL);
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      if (istBlockiert(bildschirmIndex, tx, ty)) return false;
+    }
+  }
+  return true;
+}
+
+/* Monster eines Gebiets erzeugen. Jedes normale Monster braucht
+   genau eine richtige Antwort (Boss: 4 Phasen). Ein Durchlauf hat
+   damit 16 Aufgaben (12 Monster + Boss) – ca. 15-25 min. */
+function gebietZuruecksetzen(gi) {
+  const gb = GEBIETE[gi];
+  const z = {
+    besiegt: false,
+    gegenstandDraussen: false,
+    gegenstandMitgenommen: false,
+    herzFallen: [],
+    monster: [],
+    betreten: false      /* Gebiets-Text schon eingeblendet? */
+  };
+  GEBIET_ZUSTAND[gi] = z;
+  gb.monsterSpawns.forEach(function (s) {
+    z.monster.push({
+      bildschirm: gb.startBildschirm + s.k,
+      x: s.x * CONFIG.KACHEL, y: s.y * CONFIG.KACHEL,
+      hp: gb.boss ? 4 : 1,
+      lebt: true,
+      eiszeit: 0,           // Frames Ruhe nach einem Kampf
+      timer: 0, dx: 0, dy: 0
+    });
+  });
+}
+
+/* Einfache KI: zufällig laufen oder Mira verfolgen,
+   nur Monster auf dem aktuellen Bildschirm bewegen sich. */
+function aktualisiereMonster() {
+  const bi = SPIELER.bildschirm;
+  const gi = BILDSCHIRME[bi].gebietIndex;
+  const gb = GEBIETE[gi];
+  const z = GEBIET_ZUSTAND[gi];
+  for (let i = 0; i < z.monster.length; i++) {
+    const m = z.monster[i];
+    if (!m.lebt || m.bildschirm !== bi) continue;
+    if (m.eiszeit > 0) { m.eiszeit--; continue; }
+
+    let dx = 0, dy = 0, tempo = CONFIG.MONSTER_TEMPO;
+    const abstand = Math.abs(SPIELER.x - m.x) + Math.abs(SPIELER.y - m.y);
+    if (gb.verhalten === 'jagd' && abstand < 100) {
+      dx = SPIELER.x > m.x ? 1 : (SPIELER.x < m.x ? -1 : 0);
+      dy = SPIELER.y > m.y ? 1 : (SPIELER.y < m.y ? -1 : 0);
+      tempo = CONFIG.JAGD_TEMPO;
+    } else {
+      m.timer--;
+      if (m.timer <= 0) {
+        m.timer = 40 + Math.floor(Math.random() * 80);
+        if (Math.random() < 0.4) { m.dx = 0; m.dy = 0; }
+        else {
+          const r = Math.floor(Math.random() * 4);
+          m.dx = [1, -1, 0, 0][r];
+          m.dy = [0, 0, 1, -1][r];
+        }
+      }
+      dx = m.dx; dy = m.dy;
+    }
+    if (dx !== 0 && platzFrei(bi, m.x + dx * tempo, m.y)) m.x += dx * tempo;
+    if (dy !== 0 && platzFrei(bi, m.x, m.y + dy * tempo)) m.y += dy * tempo;
+    /* Monster bleiben in ihrem Bildschirm. */
+    m.x = Math.max(16, Math.min(224, m.x));
+    m.y = Math.max(16, Math.min(160, m.y));
+  }
+}
+
+/* ============================================================
+   10. Kampf – Kampfbildschirm, Zahlenfeld, Feedback
+   ------------------------------------------------------------
+   Gleichungssystem oben (I / ∧ II), bei „grafisch" das
+   Koordinatensystem mit zwei Geraden, Eingabefelder für x und y,
+   die Schaltflächen „keine Lösung" und „unendlich viele" sowie
+   das Bildschirm-Zahlenfeld (0-9, Komma, Minus, Bruchstrich /,
+   Löschen, OK). Niveau „leicht": Lückenschritte, bis „standard":
+   Hinweis-Schaltfläche (9.3). Feedback nach Abschnitt 11 mit
+   scrollbarer Lösungsweg-Anzeige. */
+
+let KAMPF = null;
+const GEBIET_VERFAHREN = { wiese: 'grafisch', wald: 'gleichsetzen', sumpf: 'einsetzen', hoehle: 'addition' };
+const VERFAHREN_KURZ = {
+  grafisch: 'grafisch', gleichsetzen: 'Gleichsetzen',
+  einsetzen: 'Einsetzen', addition: 'Addition'
+};
+
+function starteKampf(m, gi) {
+  const gb = GEBIETE[gi];
+  KAMPF = {
+    monster: m, gebietIndex: gi,
+    verfahren: GEBIET_VERFAHREN[gb.id],
+    niveau: NIVEAUS[SPIEL.niveauIndex],
+    modus: 'aufgabe',    /* 'aufgabe' | 'richtig' | 'weg' | 'wahl' | 'wahlEnde' */
+    sfTyp: 'auto',
+    aufgabe: null,
+    feldAktiv: 'x', eingabeX: '', eingabeY: '',
+    meldung: '', meldungDauer: 0,
+    hinweisOffen: false, richtigTimer: 0,
+    werkzeugBenutzt: {}, werkzeugText: '', fernrohrOffen: false,
+    wegZeilen: [], wegScroll: 0, wegSichtbar: 20, fehlerHinweis: '',
+    regionen: [],
+    bossPhasen: null, bossSf: null, bossPhase: 0,
+    wahlAuswahl: 0, wahlRichtig: false, wahlFeedback: ''
+  };
+  if (gb.boss) {
+    /* Boss (Burg): 4 Phasen, je Phase ein anderes Verfahren in
+       gemischter Reihenfolge, mindestens ein Sonderfall (9.2).
+       Vor jeder algebraischen Aufgabe steht die Verfahrenswahl. */
+    const phasen = erzeugeBossPhasen();
+    KAMPF.bossPhasen = phasen.verfahren;
+    KAMPF.bossSf = phasen.sf;
+    KAMPF.bossPhase = 0;
+    bossAufgabeErzeugen(true);
+  } else {
+    neueAufgabe('auto');
+  }
+  SPIEL.zustand = 'kampf';
+}
+
+/* Boss-Phasen: alle vier Verfahren gemischt, ein zufälliger
+   Index wird zum Sonderfall (keine oder unendlich viele Lösungen). */
+function erzeugeBossPhasen() {
+  const verfahren = VERFAHREN_LISTE.slice();
+  for (let i = verfahren.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = verfahren[i]; verfahren[i] = verfahren[j]; verfahren[j] = tmp;
+  }
+  const sfIndex = zg(0, 3);
+  const sf = [];
+  for (let i = 0; i < 4; i++) {
+    sf.push(i === sfIndex ? (Math.random() < 0.5 ? 'keine' : 'unendlich') : 'eindeutig');
+  }
+  return { verfahren: verfahren, sf: sf };
+}
+
+/* Aufgabe einer Bossphase. Die Anzeigeformen werden so gewählt,
+   dass die Regel aus Abschnitt 9.2 greift: beide nach derselben
+   Variablen aufgelöst → Gleichsetzen; eine aufgelöst → Einsetzen;
+   beide in Normalform → Addition. */
+function bossAufgabeErzeugen(mitWahl) {
+  const v = KAMPF.bossPhasen[KAMPF.bossPhase];
+  const sf = KAMPF.bossSf[KAMPF.bossPhase];
+  const auf = erzeugeAufgabe(v, KAMPF.niveau, sf);
+  const sys = auf.system;
+  if (v === 'gleichsetzen') {
+    const vari = gleichsetzVariable(sys);
+    sys.vari = vari;
+    sys.g1.form = { typ: 'aufg', vari: vari, reihenfolge: 'xb' };
+    sys.g2.form = { typ: 'aufg', vari: vari, reihenfolge: sf === 'unendlich' ? 'bx' : 'xb' };
+  } else if (v === 'einsetzen') {
+    sys.g2.form = normalFormZufall();
+  } else if (v === 'addition') {
+    sys.g1.form = normalFormZufall();
+    sys.g2.form = normalFormZufall();
+    if (glAnzeige(sys.g1) === glAnzeige(sys.g2)) {
+      sys.g2.form = { typ: 'normal', ordnung: sys.g1.form.ordnung === 'xy' ? 'yx' : 'xy' };
+    }
+  }
+  /* Hinweis und Lückenschritt passend zur neuen Darstellung */
+  auf.hinweis = hinweisText(v, sys);
+  auf.luecke = lueckeText(v, auf);
+  KAMPF.verfahren = v;
+  KAMPF.sfTyp = sf;
+  KAMPF.aufgabe = auf;
+  KAMPF.eingabeX = ''; KAMPF.eingabeY = ''; KAMPF.feldAktiv = 'x';
+  KAMPF.hinweisOffen = false; KAMPF.wegScroll = 0;
+  KAMPF.wahlAuswahl = 0;
+  /* Werkzeuge wieder aufladen (Abschnitt 6) */
+  KAMPF.werkzeugBenutzt = {}; KAMPF.werkzeugText = ''; KAMPF.fernrohrOffen = false;
+  KAMPF.modus = (mitWahl && v !== 'grafisch') ? 'wahl' : 'aufgabe';
+  if (KAMPF.modus === 'aufgabe') kampfMeldung('Phase ' + (KAMPF.bossPhase + 1) + ' von 4');
+}
+
+/* Neue Aufgabe desselben Typs (Abschnitt 11): gleiches Verfahren
+   und gleiche Sonderfall-Kategorie, aber neue Zahlen. Im Bosskampf
+   wird die aktuelle Phase neu ausgewürfelt (Wahl entfällt dann). */
+function neueAufgabe(sfTyp) {
+  if (KAMPF.bossPhasen) { bossAufgabeErzeugen(false); return; }
+  KAMPF.sfTyp = sfTyp;
+  KAMPF.aufgabe = erzeugeAufgabe(KAMPF.verfahren, KAMPF.niveau, sfTyp);
+  KAMPF.eingabeX = ''; KAMPF.eingabeY = ''; KAMPF.feldAktiv = 'x';
+  KAMPF.hinweisOffen = false; KAMPF.wegScroll = 0;
+  KAMPF.modus = 'aufgabe';
+  /* Werkzeuge wieder aufladen (Abschnitt 6) */
+  KAMPF.werkzeugBenutzt = {}; KAMPF.werkzeugText = ''; KAMPF.fernrohrOffen = false;
+}
+
+/* Verfahrenswahl im Bosskampf (9.2): Auswahl aus drei Verfahren,
+   Bonus bei sinnvoller Wahl, aber keine Strafe. */
+const WAHL_VERFAHREN = ['gleichsetzen', 'einsetzen', 'addition'];
+function wahlTreffen(i) {
+  if (KAMPF.modus !== 'wahl') return;
+  const richtig = i === WAHL_VERFAHREN.indexOf(KAMPF.verfahren);
+  if (SPIEL.statistik) SPIEL.statistik.wahl[richtig ? 0 : 1]++;
+  const name = VERFAHREN_KURZ[KAMPF.verfahren];
+  KAMPF.wahlRichtig = richtig;
+  KAMPF.wahlFeedback = richtig
+    ? 'Richtig! ' + name + ' ist hier das geschickteste Verfahren.'
+    : 'Das geht auch – aber ' + name + ' ist hier geschickter. Kein Nachteil!';
+  KAMPF.modus = 'wahlEnde';
+}
+
+function kampfMeldung(t) { KAMPF.meldung = t; KAMPF.meldungDauer = 150; }
+
+function kampfZeichen(z) {
+  if (z === '.') z = ',';
+  if (z === '-') z = '−';
+  const feld = KAMPF.feldAktiv === 'x' ? 'eingabeX' : 'eingabeY';
+  if (KAMPF[feld].length >= 8) return;
+  KAMPF[feld] += z;
+}
+function kampfFeldLeeren() { KAMPF[KAMPF.feldAktiv === 'x' ? 'eingabeX' : 'eingabeY'] = ''; }
+function kampfFeldWechseln(welches) { KAMPF.feldAktiv = welches; }
+
+function kampfOK() {
+  if (KAMPF.modus === 'weg') { wegWeiter(); return; }
+  if (KAMPF.modus !== 'aufgabe') return;
+  const bx = parseEingabe(KAMPF.eingabeX), by = parseEingabe(KAMPF.eingabeY);
+  if (!bx || !by) { kampfMeldung('Gib in beide Felder eine Zahl ein.'); return; }
+  kampfAntwort({ typ: 'paar', x: bx, y: by });
+}
+function kampfAntwort(antwort) {
+  if (KAMPF.modus !== 'aufgabe') return;
+  KAMPF.fernrohrOffen = false; KAMPF.werkzeugText = '';
+  const erg = pruefeAntwort(KAMPF.aufgabe.loesung, antwort);
+  /* Statistik für den Endbildschirm (Abschnitt 6) */
+  if (SPIEL.statistik) {
+    SPIEL.statistik.jeVerfahren[KAMPF.verfahren][erg.richtig ? 0 : 1]++;
+    if (KAMPF.aufgabe.sfTyp !== 'eindeutig') {
+      SPIEL.statistik.sonderfall[erg.richtig ? 0 : 1]++;
+    }
+  }
+  if (erg.richtig) {
+    effekt('treffer');
+    KAMPF.modus = 'richtig';
+    KAMPF.richtigTimer = 55;
+  } else {
+    /* Falsch: ein Herz verloren, dann der komplette Lösungsweg (11) */
+    SPIELER.herzen--;
+    SPIELER.blinkDauer = 120;
+    effekt('fehler');
+    KAMPF.fehlerHinweis = erg.hinweis;
+    KAMPF.wegZeilen = erzeugeWeg(KAMPF.aufgabe.system, KAMPF.verfahren, KAMPF.aufgabe.loesung);
+    KAMPF.wegScroll = 0;
+    KAMPF.modus = 'weg';
+  }
+}
+function wegScrollUm(dz) {
+  const max = Math.max(0, KAMPF.wegZeilen.length - KAMPF.wegSichtbar);
+  KAMPF.wegScroll = Math.max(0, Math.min(max, KAMPF.wegScroll + dz));
+}
+function wegWeiter() {
+  if (SPIELER.herzen <= 0) { KAMPF = null; SPIEL.zustand = 'gameover'; return; }
+  neueAufgabe(KAMPF.sfTyp);
+}
+
+/* Sieg: Monster verliert ein Leben, ggf. Herz fallen lassen,
+   Gebiet prüfen (aus Etappe 1). */
+function kampfGewonnen() {
+  const m = KAMPF.monster, gi = KAMPF.gebietIndex;
+  const z = GEBIET_ZUSTAND[gi], gb = GEBIETE[gi];
+  m.lebt = false;
+  if (Math.random() < 0.3) {
+    z.herzFallen.push({
+      bildschirm: m.bildschirm,
+      x: Math.max(16, Math.min(224, Math.round(m.x))),
+      y: Math.max(16, Math.min(160, Math.round(m.y)))
+    });
+  }
+  const nochLebend = z.monster.some(function (x) { return x.lebt; });
+  if (!nochLebend) {
+    z.besiegt = true;   /* Zaubertor öffnet sich */
+    if (gb.boss) {
+      /* Abschluss: Boss besiegt – Stoppuhr anhalten (Abschnitt 6) */
+      SPIEL.endZeit = Date.now();
+      effekt('sieg');
+      KAMPF = null; SPIEL.zustand = 'ende'; return;
+    }
+    nachricht('Der Weg ist frei!');
+    if (gb.gegenstandName) z.gegenstandDraussen = true;
+  }
+  KAMPF = null;
+  SPIEL.zustand = 'welt';
+  SPIELER.unverwundbar = 100;
+  /* Herz-Aufladung: Nach jedem gewonnenen Kampf sind die Herzen
+     wieder voll (leicht/standard 3, plus 2). */
+  SPIELER.herzen = maxHerzen();
+}
+
+function tickKampf() {
+  if (KAMPF.meldungDauer > 0) KAMPF.meldungDauer--;
+  if (KAMPF.modus === 'richtig') {
+    if (--KAMPF.richtigTimer <= 0) {
+      const m = KAMPF.monster;
+      m.hp--;
+      if (m.hp <= 0) kampfGewonnen();
+      else if (KAMPF.bossPhasen) {
+        /* Nächste Bossphase mit neuer Verfahrenswahl (9.2) */
+        KAMPF.bossPhase++;
+        bossAufgabeErzeugen(true);
+      } else {
+        kampfMeldung('Treffer! Noch ' + m.hp + ' Treffer nötig.');
+        neueAufgabe(KAMPF.sfTyp);
+      }
+    }
+    ereignisse = [];
+    return;
+  }
+  for (let i = 0; i < ereignisse.length; i++) {
+    const e = ereignisse[i];
+    if (KAMPF.modus === 'weg') {
+      if (e === 'enter') wegWeiter();
+      else if (e === 'hoch') wegScrollUm(-2);
+      else if (e === 'runter') wegScrollUm(2);
+    } else if (KAMPF.modus === 'wahl') {
+      if (e === 'enter') wahlTreffen(KAMPF.wahlAuswahl);
+      else if (e === 'hoch') KAMPF.wahlAuswahl = (KAMPF.wahlAuswahl + 2) % 3;
+      else if (e === 'runter') KAMPF.wahlAuswahl = (KAMPF.wahlAuswahl + 1) % 3;
+    } else if (KAMPF.modus === 'wahlEnde') {
+      if (e === 'enter') KAMPF.modus = 'aufgabe';
+    } else if (KAMPF.modus === 'aufgabe') {
+      if (e === 'enter') kampfEnter();
+      else if (e === 'hoch') kampfFeldWechseln('x');
+      else if (e === 'runter') kampfFeldWechseln('y');
+    }
+  }
+}
+
+/* ---------- Gegenstände als Werkzeuge im Kampf (Abschnitt 6) ----------
+   Jedes gefundene Werkzeug ist einmal pro Aufgabe einsetzbar,
+   ohne Nachteil. Auf Niveau plus (und im grafischen Kampf) ist
+   nur der Bumerang verfügbar: Die Probe ist Kontrolle, keine
+   Hilfe. Der Hammer zeigt die Normalform – nur sinnvoll, wenn
+   eine Gleichung noch nicht in Normal- oder aufgelöster Form
+   steht. */
+const WERKZEUG_NAMEN = ['Fernrohr', 'Schwert', 'Bumerang', 'Hammer'];
+function werkzeugeVerfuegbar() {
+  const besitz = SPIELER.gegenstaende;
+  if (KAMPF.niveau === 'plus' || KAMPF.verfahren === 'grafisch') {
+    return besitz.indexOf('Bumerang') >= 0 ? ['Bumerang'] : [];
+  }
+  const liste = [];
+  WERKZEUG_NAMEN.forEach(function (name) {
+    if (besitz.indexOf(name) < 0) return;
+    if (name === 'Hammer' && KAMPF.aufgabe) {
+      const sys = KAMPF.aufgabe.system;
+      const braucht = sys.g1.form.typ !== 'normal' && sys.g1.form.typ !== 'aufg'
+        || sys.g2.form.typ !== 'normal' && sys.g2.form.typ !== 'aufg';
+      if (!braucht) return;
+    }
+    liste.push(name);
+  });
+  return liste;
+}
+
+/* Schwert: der erste Umformungsschritt des Lösungswegs,
+   ohne die Lösung zu verraten. Reine Funktion (Selbsttest). */
+function schwertText(auf, verfahren) {
+  const weg = erzeugeWeg(auf.system, verfahren, auf.loesung);
+  for (let i = 0; i < weg.length; i++) {
+    const z = weg[i].trim();
+    if (!z || z.indexOf('I:') === 0 || z.indexOf('∧ II:') === 0) continue;
+    return z;
+  }
+  return '';
+}
+
+/* Bumerang: Probe der eingegebenen Werte in beiden Gleichungen.
+   Reine Funktion (Selbsttest). */
+function bumerangText(sys, x, y) {
+  const probe = function (g, name) {
+    const links = bAdd(bMul(g.a, x), bMul(g.b, y));
+    return name + ' ' + (bGleich(links, g.c) ? 'stimmt ✓' : 'stimmt nicht');
+  };
+  /* kurze Zeilen (max. 15 Zeichen), passen auch in den schmalen
+     Kasten des grafischen Kampfs */
+  return 'Probe:\n' + probe(sys.g1, 'I') + '\n' + probe(sys.g2, 'II');
+}
+
+/* Hammer: beide Gleichungen in Normalform. Reine Funktion. */
+function hammerText(sys) {
+  return 'I: ' + normalformAnzeige(sys.g1) + '\n∧ II: ' + normalformAnzeige(sys.g2);
+}
+
+/* Werkzeug benutzen (Abschnitt 6): einmal pro Aufgabe. */
+function werkzeugBenutzen(name) {
+  if (KAMPF.modus !== 'aufgabe' || KAMPF.werkzeugBenutzt[name]) return;
+  if (werkzeugeVerfuegbar().indexOf(name) < 0) return;
+  const sys = KAMPF.aufgabe.system;
+  if (name === 'Fernrohr') {
+    KAMPF.fernrohrOffen = true;
+  } else if (name === 'Schwert') {
+    KAMPF.werkzeugText = schwertText(KAMPF.aufgabe, KAMPF.verfahren);
+  } else if (name === 'Hammer') {
+    KAMPF.werkzeugText = hammerText(sys);
+  } else if (name === 'Bumerang') {
+    const x = parseEingabe(KAMPF.eingabeX), y = parseEingabe(KAMPF.eingabeY);
+    if (!x || !y) {
+      /* Ohne Werte keine Probe – nicht als benutzt zählen */
+      KAMPF.werkzeugText = 'Gib erst x und y ein.';
+      return;
+    }
+    KAMPF.werkzeugText = bumerangText(sys, x, y);
+  }
+  KAMPF.werkzeugBenutzt[name] = true;
+}
+
+/* Werkzeugleiste (algebraischer Kampf): gefundene Gegenstände
+   in fester Reihenfolge, benutzte Knöpfe grau ohne Region. */
+/* 2×2-Raster mit 124 px breiten Knöpfen, damit auch „Fernrohr“
+   und „Bumerang“ (64 px) vollständig hineinpassen. */
+function werkzeugLeisteZeichnen(g, y) {
+  werkzeugeVerfuegbar().forEach(function (name, i) {
+    const x = 4 + (i % 2) * 128, yk = y + Math.floor(i / 2) * 14;
+    if (KAMPF.werkzeugBenutzt[name]) {
+      panelZeichnen(g, x, yk, 120, 12);
+      zeichneText(g, name, x + Math.floor((120 - textBreite(name)) / 2), yk + 2, GRAU);
+    } else {
+      zeichneKnopf(g, x, yk, 120, 12, name);
+      KAMPF.regionen.push({ x: x, y: yk, b: 120, h: 12, aktion: 'werkzeug:' + name });
+    }
+  });
+}
+/* Flache Arena (1-fach) unter dem Werkzeug-Raster */
+function kampfArenaFlach(g, y0) {
+  const gb = GEBIETE[KAMPF.gebietIndex];
+  const F = PALETTE;
+  g.fillStyle = F[NACHT]; g.fillRect(0, y0, 256, 240 - y0);
+  g.fillStyle = F[DUNKELGRAU]; g.fillRect(0, y0, 256, 1);
+  g.fillStyle = F[GRAU]; g.fillRect(0, y0 + 1, 256, 1);
+  const schweben = (SPIEL.frame >> 4) & 1;
+  zeichneSprite(g, MIRA.links[0], 44, y0 + 5 - schweben, true, 1);
+  zeichneSprite(g, MONSTER_SPRITES[gb.id], 196, y0 + 5 + schweben, false, 1);
+  zeichneTextMitte(g, 'gegen', y0 + 9, GRAU);
+}
+
+/* Enter im Kampf: schließt zuerst Fernrohr und Werkzeugtext,
+   reicht sonst an OK weiter (Abschnitt 6). */
+function kampfEnter() {
+  if (KAMPF.fernrohrOffen || KAMPF.werkzeugText) {
+    KAMPF.fernrohrOffen = false;
+    KAMPF.werkzeugText = '';
+    return;
+  }
+  kampfOK();
+}
+
+/* Eingaben: Bildschirm-Zahlenfeld, Knöpfe, Felder (7/9.1). */
+function kampfAktion(a) {
+  if (a === 'ok') kampfOK();
+  else if (a === 'loeschen') kampfFeldLeeren();
+  else if (a.indexOf('z:') === 0) kampfZeichen(a.substr(2));
+  else if (a === 'feldx') kampfFeldWechseln('x');
+  else if (a === 'feldy') kampfFeldWechseln('y');
+  else if (a === 'antwortKeine') kampfAntwort({ typ: 'keine' });
+  else if (a === 'antwortUnendlich') kampfAntwort({ typ: 'unendlich' });
+  else if (a === 'hinweis') KAMPF.hinweisOffen = !KAMPF.hinweisOffen;
+  else if (a === 'werkzeugZu') { KAMPF.fernrohrOffen = false; KAMPF.werkzeugText = ''; }
+  else if (a.indexOf('werkzeug:') === 0) werkzeugBenutzen(a.substr(9));
+  else if (a === 'wahl:0') wahlTreffen(0);
+  else if (a === 'wahl:1') wahlTreffen(1);
+  else if (a === 'wahl:2') wahlTreffen(2);
+  else if (a === 'wahlWeiter') { if (KAMPF.modus === 'wahlEnde') KAMPF.modus = 'aufgabe'; }
+  else if (a === 'scrollHoch') wegScrollUm(-2);
+  else if (a === 'scrollRunter') wegScrollUm(2);
+  else if (a === 'weiter') wegWeiter();
+}
+function kampfTipp(p) {
+  const r = KAMPF.regionen;
+  for (let i = 0; i < r.length; i++) {
+    if (p.x >= r[i].x && p.x < r[i].x + r[i].b && p.y >= r[i].y && p.y < r[i].y + r[i].h) {
+      /* kurzzeitige Druckmarke für den Eindrück-Effekt (rein optisch) */
+      KAMPF.druck = { x: r[i].x, y: r[i].y, b: r[i].b, h: r[i].h, frame: SPIEL.frame };
+      kampfAktion(r[i].aktion);
+      return;
+    }
+  }
+}
+
+/* Physische Tastatur im Kampf (Abschnitt 7): Ziffern, Komma,
+   Minus, Bruchstrich, Löschen (Backspace), OK (Enter),
+   Pfeiltasten, K = keine Lösung, U = unendlich viele, H = Hinweis,
+   M = Ton an/aus, 1/2/3 = Verfahrenswahl im Bosskampf. */
+function kampfTastatur(e) {
+  const k = e.key;
+  if (k === 'm' || k === 'M') { tonUmschalten(); return; }
+  if (KAMPF.modus === 'wahl') {
+    if (k === '1') { wahlTreffen(0); e.preventDefault(); return; }
+    if (k === '2') { wahlTreffen(1); e.preventDefault(); return; }
+    if (k === '3') { wahlTreffen(2); e.preventDefault(); return; }
+    if (k === 'ArrowUp') { KAMPF.wahlAuswahl = (KAMPF.wahlAuswahl + 2) % 3; e.preventDefault(); return; }
+    if (k === 'ArrowDown') { KAMPF.wahlAuswahl = (KAMPF.wahlAuswahl + 1) % 3; e.preventDefault(); return; }
+    if (k === 'Enter') { wahlTreffen(KAMPF.wahlAuswahl); e.preventDefault(); return; }
+    return;
+  }
+  if (KAMPF.modus === 'wahlEnde') {
+    if (k === 'Enter') { KAMPF.modus = 'aufgabe'; e.preventDefault(); }
+    return;
+  }
+  if (k >= '0' && k <= '9') { kampfZeichen(k); e.preventDefault(); return; }
+  if (k === ',' || k === '.') { kampfZeichen(','); e.preventDefault(); return; }
+  if (k === '-' || k === '−') { kampfZeichen('−'); e.preventDefault(); return; }
+  if (k === '/') { kampfZeichen('/'); e.preventDefault(); return; }
+  if (k === 'Backspace') { kampfFeldLeeren(); e.preventDefault(); return; }
+  if (k === 'Enter') { kampfEnter(); e.preventDefault(); return; }
+  if (k === 'ArrowUp') {
+    if (KAMPF.modus === 'weg') wegScrollUm(-2); else kampfFeldWechseln('x');
+    e.preventDefault(); return;
+  }
+  if (k === 'ArrowDown') {
+    if (KAMPF.modus === 'weg') wegScrollUm(2); else kampfFeldWechseln('y');
+    e.preventDefault(); return;
+  }
+  if (k === 'ArrowLeft' || k === 'ArrowRight') { e.preventDefault(); return; }
+  if (k === 'k' || k === 'K') { kampfAntwort({ typ: 'keine' }); return; }
+  if (k === 'u' || k === 'U') { kampfAntwort({ typ: 'unendlich' }); return; }
+  if (k === 'h' || k === 'H') { KAMPF.hinweisOffen = !KAMPF.hinweisOffen; return; }
+}
+
+/* Panel mit Facetten-Rahmen für den Kampfbildschirm. */
+function panelZeichnen(g, x, y, b, h) {
+  const F = PALETTE;
+  g.fillStyle = F[NACHT]; g.fillRect(x, y, b, h);
+  g.fillStyle = F[GRAU];      g.fillRect(x, y, b, 1); g.fillRect(x, y, 1, h);
+  g.fillStyle = F[DUNKELGRAU]; g.fillRect(x, y + h - 1, b, 1); g.fillRect(x + b - 1, y, 1, h);
+}
+
+/* Knopf mit Facetten-Rahmen (hell oben/links, dunkel unten/rechts)
+   und kurzem Eindrück-Effekt nach dem Antippen. */
+function zeichneKnopf(g, x, y, b, h, text) {
+  const F = PALETTE;
+  const dr = KAMPF.druck;
+  const gedrueckt = dr && (SPIEL.frame - dr.frame) <= 6
+    && dr.x === x && dr.y === y && dr.b === b && dr.h === h;
+  g.fillStyle = F[gedrueckt ? NACHT : DUNKELGRAU]; g.fillRect(x, y, b, h);
+  if (gedrueckt) {
+    g.fillStyle = F[NACHT]; g.fillRect(x, y, b, 1); g.fillRect(x, y, 1, h);
+    g.fillStyle = F[GRAU];  g.fillRect(x, y + h - 1, b, 1); g.fillRect(x + b - 1, y, 1, h);
+  } else {
+    g.fillStyle = F[GRAU];      g.fillRect(x, y, b, 1); g.fillRect(x, y, 1, h);
+    g.fillStyle = F[NACHT]; g.fillRect(x, y + h - 1, b, 1); g.fillRect(x + b - 1, y, 1, h);
+    g.fillStyle = F[HELLGRAU]; g.fillRect(x + 1, y + 1, b - 2, 1); g.fillRect(x + 1, y + 1, 1, h - 2);
+  }
+  zeichneText(g, text, x + Math.floor((b - textBreite(text)) / 2),
+              y + Math.floor((h - 8) / 2), WEISS);
+}
+
+/* Gleichungszeile für den Kampfbildschirm: wird nie umbrochen.
+   Jede Gleichung bekommt ihre eigene Zeile. Passt sie nicht in
+   die verfügbare Breite, entfallen die Leerzeichen
+   (z.B. „∧II:y=−1,5x−6") – so bleiben beide Gleichungen auch im
+   längsten möglichen Fall vollständig lesbar. */
+function kampfGleichungsZeile(praefix, g, maxZeichen) {
+  const anzeige = glAnzeige(g);
+  if ((praefix + anzeige).length <= maxZeichen) return praefix + anzeige;
+  return praefix.replace(/ /g, '') + anzeige.replace(/ /g, '');
+}
+
+/* Kampfarena: Mira links, Monster rechts auf einem Bodenstreifen
+   (nur Optik, 2-fach vergrößert, sanftes Schweben). */
+function kampfArena(g, y0) {
+  const gb = GEBIETE[KAMPF.gebietIndex];
+  const F = PALETTE;
+  g.fillStyle = F[NACHT]; g.fillRect(0, y0, 256, 240 - y0);
+  g.fillStyle = F[DUNKELGRAU]; g.fillRect(0, y0, 256, 1);
+  g.fillStyle = F[GRAU]; g.fillRect(0, y0 + 1, 256, 1);
+  const schweben = (SPIEL.frame >> 4) & 1;
+  schattenZeichnen(g, 52, y0 + 36, 28);
+  schattenZeichnen(g, 204, y0 + 36, 28);
+  zeichneSprite(g, MIRA.links[0], 36, y0 + 4 - schweben, true, 2);
+  zeichneSprite(g, MONSTER_SPRITES[gb.id], 188, y0 + 4 + schweben, false, 2);
+  zeichneTextMitte(g, 'gegen', y0 + 16, GRAU);
+}
+/* Kleine Variante (1-fach) neben dem Zahlenfeld des grafischen Kampfs */
+function kampfArenaKlein(g) {
+  const gb = GEBIETE[KAMPF.gebietIndex];
+  const schweben = (SPIEL.frame >> 4) & 1;
+  zeichneSprite(g, MIRA.links[0], 140, 122 - schweben, true, 1);
+  zeichneSprite(g, MONSTER_SPRITES[gb.id], 164, 122 + schweben, false, 1);
+}
+
+function zeichneKampf() {
+  const g = KONTEXT;
+  g.fillStyle = PALETTE[SCHWARZ]; g.fillRect(0, 0, 256, 240);
+  KAMPF.regionen = [];
+  /* Modus-Wechsel erkennen (einmalig Funken beim Treffer) */
+  const modusEintritt = VISUELL.kampfModus !== KAMPF.modus;
+  VISUELL.kampfModus = KAMPF.modus;
+  if (KAMPF.modus === 'weg') { zeichneKampfWeg(g); return; }
+  if (KAMPF.modus === 'richtig') {
+    zeichneKampfRichtig(g, modusEintritt);
+    partikelZeichnen(g, 'kampf');
+    return;
+  }
+  /* Kopfzeile: Monstername links, Herzen rechts */
+  zeichneText(g, GEBIETE[KAMPF.gebietIndex].monsterName, 4, 0, WEISS);
+  for (let i = 0; i < maxHerzen(); i++) {
+    g.drawImage(i < SPIELER.herzen ? HERZ_VOLL : HERZ_LEER, 252 - (maxHerzen() - i) * 9, 0);
+  }
+  if (KAMPF.modus === 'wahl') { zeichneKampfWahl(g); return; }
+  if (KAMPF.modus === 'wahlEnde') { zeichneKampfWahlEnde(g); return; }
+  if (KAMPF.verfahren === 'grafisch') zeichneKampfGrafisch(g);
+  else zeichneKampfAlgebraisch(g);
+  partikelZeichnen(g, 'kampf');
+}
+
+/* Verfahrenswahl im Bosskampf (9.2): Frage, drei Schaltflächen */
+function zeichneKampfWahl(g) {
+  const sys = KAMPF.aufgabe.system;
+  panelZeichnen(g, 0, 9, 256, 36);
+  zeichneText(g, 'Phase ' + (KAMPF.bossPhase + 1) + ' von 4', 4, 12, GELB);
+  zeichneText(g, kampfGleichungsZeile('I: ', sys.g1, 31), 4, 22, WEISS);
+  zeichneText(g, kampfGleichungsZeile('∧ II: ', sys.g2, 31), 4, 32, WEISS);
+  zeichneTextMitte(g, 'Welches Verfahren ist am', 52, HELLGRAU);
+  zeichneTextMitte(g, 'geschicktesten?', 62, HELLGRAU);
+  for (let i = 0; i < 3; i++) {
+    const y = 76 + i * 16;
+    zeichneKnopf(g, 64, y, 128, 14, VERFAHREN_KURZ[WAHL_VERFAHREN[i]]);
+    if (i === KAMPF.wahlAuswahl) zeichneText(g, '>', 52, y + 3, GELB);
+    KAMPF.regionen.push({ x: 64, y: y, b: 128, h: 14, aktion: 'wahl:' + i });
+  }
+  zeichneTextMitte(g, '(Taste 1, 2, 3 oder antippen)', 132, HELLGRAU);
+  kampfArena(g, 202);
+}
+
+/* Rückmeldung auf die Verfahrenswahl: Bonus (Tipp) bei
+   sinnvoller Wahl, keine Strafe sonst (9.2) */
+function zeichneKampfWahlEnde(g) {
+  const sys = KAMPF.aufgabe.system;
+  panelZeichnen(g, 0, 9, 256, 25);
+  zeichneText(g, kampfGleichungsZeile('I: ', sys.g1, 31), 4, 12, WEISS);
+  zeichneText(g, kampfGleichungsZeile('∧ II: ', sys.g2, 31), 4, 22, WEISS);
+  const farbe = KAMPF.wahlRichtig ? HELLGRUEN : HELLROT;
+  let y = 38;
+  textUmbruch(KAMPF.wahlFeedback, 30).forEach(function (z) {
+    zeichneText(g, z, 4, y, farbe); y += 8;
+  });
+  if (KAMPF.wahlRichtig && KAMPF.niveau !== 'plus') {
+    /* Bonus: der Verfahrens-Tipp (bei plus ohne Hilfe) */
+    y += 2;
+    textUmbruch(KAMPF.aufgabe.hinweis, 30).forEach(function (z) {
+      zeichneText(g, z, 4, y, HELLGRAU); y += 8;
+    });
+  }
+  zeichneText(g, '(Enter)', 4, 226, HELLGRAU);
+  zeichneKnopf(g, 168, 225, 84, 13, 'Weiter');
+  KAMPF.regionen.push({ x: 168, y: 225, b: 84, h: 13, aktion: 'wahlWeiter' });
+}
+
+/* Eingabefeld „x = [____]" / „y = [____]": Facetten-Rahmen, das
+   aktive Feld leuchtet hell, Cursor blinkt. */
+function feldZeichnen(g, welches, x, y, breite) {
+  const aktiv = KAMPF.feldAktiv === welches;
+  const text = welches === 'x' ? KAMPF.eingabeX : KAMPF.eingabeY;
+  zeichneText(g, welches + ' =', x, y, WEISS);
+  const fx = x + 26;
+  g.fillStyle = PALETTE[aktiv ? WEISS : DUNKELGRAU];
+  g.fillRect(fx - 1, y - 1, breite + 2, 10);
+  g.fillStyle = PALETTE[aktiv ? GRAU : NACHT];
+  g.fillRect(fx - 1, y + 8, breite + 2, 1); g.fillRect(fx + breite, y - 1, 1, 10);
+  g.fillStyle = PALETTE[SCHWARZ];
+  g.fillRect(fx, y, breite, 8);
+  zeichneText(g, text, fx + 2, y, GELB);
+  if (aktiv && ((SPIEL.frame >> 3) & 1)) {
+    g.fillStyle = PALETTE[WEISS];
+    g.fillRect(fx + 2 + text.length * 8, y, 3, 8);
+  }
+  KAMPF.regionen.push({ x: x, y: y - 2, b: breite + 28, h: 12, aktion: 'feld' + welches });
+}
+
+/* Bildschirm-Zahlenfeld (Abschnitt 7) */
+function zeichneZahlenfeld(g, y0) {
+  const labels = [['7', '8', '9', '/'], ['4', '5', '6', ','], ['1', '2', '3', '−'], ['0', 'AC', 'OK']];
+  const spalten = [4, 64, 124, 184];
+  const aktionen = [['z:7', 'z:8', 'z:9', 'z:/'], ['z:4', 'z:5', 'z:6', 'z:,'], ['z:1', 'z:2', 'z:3', 'z:−'], ['z:0', 'loeschen', 'ok']];
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      if (r === 3 && c === 3) continue;          /* OK über zwei Spalten */
+      const istOK = (r === 3 && c === 2);
+      const b = istOK ? 118 : 58;
+      zeichneKnopf(g, spalten[c], y0 + r * 24, b, 22, labels[r][c]);
+      KAMPF.regionen.push({ x: spalten[c], y: y0 + r * 24, b: b, h: 22, aktion: aktionen[r][c] });
+    }
+  }
+}
+
+/* Kampf-Layout bei algebraischen Verfahren */
+function zeichneKampfAlgebraisch(g) {
+  const sys = KAMPF.aufgabe.system;
+  /* Panel hinter dem Gleichungssystem: I und ∧ II (Abschnitt 8) */
+  panelZeichnen(g, 0, 9, 256, 25);
+  zeichneText(g, kampfGleichungsZeile('I: ', sys.g1, 31), 4, 12, WEISS);
+  zeichneText(g, kampfGleichungsZeile('∧ II: ', sys.g2, 31), 4, 22, WEISS);
+  /* Eingabe und Antwort-Schaltflächen (alle drei immer angeboten) */
+  const eY = 38;
+  feldZeichnen(g, 'x', 4, eY, 80);
+  feldZeichnen(g, 'y', 4, eY + 14, 80);
+  zeichneKnopf(g, 118, eY - 1, 134, 13, 'keine Lösung');
+  KAMPF.regionen.push({ x: 118, y: eY - 1, b: 134, h: 13, aktion: 'antwortKeine' });
+  zeichneKnopf(g, 118, eY + 14, 134, 13, 'unendl. viele');
+  KAMPF.regionen.push({ x: 118, y: eY + 14, b: 134, h: 13, aktion: 'antwortUnendlich' });
+  /* Lückenschritt (leicht) und Hinweis-Schaltfläche (bis standard) */
+  const lueckeY = eY + 30;
+  if (KAMPF.niveau === 'leicht') zeichneText(g, KAMPF.aufgabe.luecke, 4, lueckeY, HELLGRUEN);
+  if (KAMPF.niveau !== 'plus') {
+    zeichneKnopf(g, 196, lueckeY - 1, 56, 12, 'Hinweis');
+    KAMPF.regionen.push({ x: 196, y: lueckeY - 1, b: 56, h: 12, aktion: 'hinweis' });
+  }
+  /* Fernrohr (Abschnitt 6): Skizze beider Geraden ersetzt das
+     Zahlenfeld; eine Region über dem Panel schließt es wieder. */
+  if (KAMPF.fernrohrOffen) {
+    const py = lueckeY + 14;
+    panelZeichnen(g, 0, py, 256, 240 - py);
+    zeichneKoordinatensystem(g, 64, py, sys.g1, sys.g2);
+    zeichneTextMitte(g, 'Schließen: Enter oder antippen', py + 134, HELLGRAU);
+    KAMPF.regionen.push({ x: 0, y: py, b: 256, h: 240 - py, aktion: 'werkzeugZu' });
+    return;
+  }
+  zeichneZahlenfeld(g, lueckeY + 14);
+  /* Unten: Meldung > Werkzeugtext > Hinweis (Abschnitt 6).
+     Das Panel ersetzt dann Werkzeugleiste und Arena. */
+  const werkzeugAktiv = KAMPF.meldungDauer <= 0 && !!KAMPF.werkzeugText;
+  let unten = [];
+  if (KAMPF.meldungDauer > 0) unten = textUmbruch(KAMPF.meldung, 30);
+  else if (KAMPF.werkzeugText) unten = textUmbruch(KAMPF.werkzeugText, 30);
+  else if (KAMPF.hinweisOffen) unten = textUmbruch(KAMPF.aufgabe.hinweis, 30);
+  if (unten.length) {
+    /* Hinweis/Meldung/Werkzeug ersetzt die Arena, Zeilenabstand 9 px */
+    panelZeichnen(g, 0, 182, 256, 58);
+    for (let i = 0; i < unten.length && i < 6; i++) {
+      zeichneText(g, unten[i], 4, 187 + i * 9, HELLGRAU);
+    }
+    if (werkzeugAktiv) {
+      KAMPF.regionen.push({ x: 0, y: 182, b: 256, h: 58, aktion: 'werkzeugZu' });
+    }
+  } else {
+    if (werkzeugeVerfuegbar().length) {
+      werkzeugLeisteZeichnen(g, 184);
+      kampfArenaFlach(g, 214);
+    } else kampfArena(g, 202);
+  }
+}
+
+/* Kampf-Layout beim grafischen Lösen: Koordinatensystem links,
+   Gleichungen und Eingabe rechts, Zahlenfeld darunter (9.2) */
+function zeichneKampfGrafisch(g) {
+  const sys = KAMPF.aufgabe.system;
+  panelZeichnen(g, 131, 7, 125, 25);
+  zeichneKoordinatensystem(g, 2, 10, sys.g1, sys.g2);
+  /* Farbe der Gleichung = Farbe der Geraden im Koordinatensystem */
+  zeichneText(g, kampfGleichungsZeile('I: ', sys.g1, 15), 133, 11, HELLROT);
+  zeichneText(g, kampfGleichungsZeile('∧ II: ', sys.g2, 15), 133, 21, HELLBLAU);
+  feldZeichnen(g, 'x', 132, 44, 88);
+  feldZeichnen(g, 'y', 132, 58, 88);
+  zeichneKnopf(g, 132, 72, 120, 13, 'keine Lösung');
+  KAMPF.regionen.push({ x: 132, y: 72, b: 120, h: 13, aktion: 'antwortKeine' });
+  zeichneKnopf(g, 132, 87, 120, 13, 'unendl. viele');
+  KAMPF.regionen.push({ x: 132, y: 87, b: 120, h: 13, aktion: 'antwortUnendlich' });
+  if (KAMPF.niveau === 'leicht') {
+    textUmbruch(KAMPF.aufgabe.luecke, 15).forEach(function (z, i) {
+      zeichneText(g, z, 132, 104 + i * 8, HELLGRUEN);
+    });
+  }
+  if (KAMPF.niveau !== 'plus') {
+    zeichneKnopf(g, 196, 122, 56, 12, 'Hinweis');
+    KAMPF.regionen.push({ x: 196, y: 122, b: 56, h: 12, aktion: 'hinweis' });
+  }
+  /* Bumerang (Abschnitt 6): im grafischen Kampf das einzige Werkzeug.
+     Knopf „Probe“ (kurz genug neben „Hinweis“); er steht dort, wo
+     sonst die kleine Arena ist, die dann entfällt. */
+  if (werkzeugeVerfuegbar().indexOf('Bumerang') >= 0) {
+    if (KAMPF.werkzeugBenutzt.Bumerang) {
+      panelZeichnen(g, 132, 122, 60, 12);
+      zeichneText(g, 'Probe', 132 + Math.floor((60 - textBreite('Probe')) / 2), 124, GRAU);
+    } else {
+      zeichneKnopf(g, 132, 122, 60, 12, 'Probe');
+      KAMPF.regionen.push({ x: 132, y: 122, b: 60, h: 12, aktion: 'werkzeug:Bumerang' });
+    }
+  } else kampfArenaKlein(g);
+  /* Meldung, Werkzeugtext oder Hinweis als Kasten über dem
+     Koordinatensystem (Vorrang, Abschnitt 6) */
+  const kastenText = KAMPF.meldungDauer > 0 ? KAMPF.meldung
+    : (KAMPF.werkzeugText ? KAMPF.werkzeugText
+    : (KAMPF.hinweisOffen ? KAMPF.aufgabe.hinweis : ''));
+  if (kastenText) {
+    const zeilen = textUmbruch(kastenText, 15);
+    panelZeichnen(g, 2, 40, 128, 8 + zeilen.length * 8);
+    for (let i = 0; i < zeilen.length; i++) zeichneText(g, zeilen[i], 6, 44 + i * 8, HELLGRAU);
+    if (KAMPF.meldungDauer <= 0 && KAMPF.werkzeugText) {
+      KAMPF.regionen.push({ x: 2, y: 40, b: 128, h: 8 + zeilen.length * 8, aktion: 'werkzeugZu' });
+    }
+  }
+  zeichneZahlenfeld(g, 142);
+}
+
+/* Kurze positive Rückmeldung mit Treffer-Animation (11):
+   Monster mit Schatten und Schweben, kurzem Zittern statt Blinken,
+   Funken beim Eintritt der Phase. */
+function zeichneKampfRichtig(g, eintritt) {
+  const gb = GEBIETE[KAMPF.gebietIndex];
+  const m = KAMPF.monster;
+  zeichneTextMitte(g, 'Richtig!', 36, HELLGRUEN, 2);
+  schattenZeichnen(g, 128, 95, 26);
+  const zittern = KAMPF.richtigTimer > 44 ? ((SPIEL.frame & 1) ? 2 : -2) : 0;
+  const schweben = ((SPIEL.frame >> 3) & 1);
+  zeichneSprite(g, MONSTER_SPRITES[gb.id], 112 + zittern, 64 - schweben, false, 2);
+  if (eintritt) {
+    /* Funken beim Treffer, radial um das Monster */
+    for (let i = 0; i < 10; i++) {
+      const w = i / 10 * Math.PI * 2;
+      partikel('kampf', 128 + Math.cos(w) * 8, 78 + Math.sin(w) * 8,
+        Math.cos(w) * (0.7 + Math.random() * 0.6), Math.sin(w) * (0.7 + Math.random() * 0.6) - 0.25,
+        16 + zg(0, 8), [GELB, GLANZ, WEISS][i % 3]);
+    }
+  }
+  zeichneTextMitte(g, 'Treffer!', 110, GELB);
+  if (m.hp > 1) {
+    zeichneTextMitte(g, gb.boss
+      ? 'Phase ' + (KAMPF.bossPhase + 1) + ' von 4 geschafft!'
+      : 'Noch ' + (m.hp - 1) + ' Treffer nötig.', 130, WEISS);
+  } else zeichneTextMitte(g, 'Das Monster ist besiegt!', 130, WEISS);
+}
+
+/* Lösungsweg-Anzeige nach falscher Antwort, scrollbar (11) */
+function zeichneKampfWeg(g) {
+  /* Panel als Hintergrund: heller Kontrast für den Rechenweg */
+  panelZeichnen(g, 0, 0, 256, 240);
+  zeichneText(g, 'Lösungsweg: ' + VERFAHREN_KURZ[KAMPF.verfahren], 4, 1, GELB);
+  zeichneText(g, 'Falsch. Ein Herz verloren!', 4, 13, HELLROT);
+  textUmbruch(KAMPF.fehlerHinweis, 30).forEach(function (z, i) {
+    zeichneText(g, z, 4, 24 + i * 10, WEISS);
+  });
+  const kopfHoehe = 24 + textUmbruch(KAMPF.fehlerHinweis, 30).length * 10 + 6;
+  /* sichtbare Zeilen + Scrollbalken (Zeilenabstand 10 px) */
+  const sichtbar = Math.max(4, Math.floor((220 - kopfHoehe) / 10));
+  KAMPF.wegSichtbar = sichtbar;
+  for (let i = 0; i < sichtbar; i++) {
+    const zeile = KAMPF.wegZeilen[KAMPF.wegScroll + i];
+    if (zeile === undefined) break;
+    zeichneText(g, zeile, 4, kopfHoehe + i * 10, WEISS);
+  }
+  const maxScroll = Math.max(0, KAMPF.wegZeilen.length - sichtbar);
+  if (maxScroll > 0) {
+    zeichneKnopf(g, 244, 100, 10, 12, '▲');
+    KAMPF.regionen.push({ x: 244, y: 100, b: 10, h: 12, aktion: 'scrollHoch' });
+    zeichneKnopf(g, 244, 116, 10, 12, '▼');
+    KAMPF.regionen.push({ x: 244, y: 116, b: 10, h: 12, aktion: 'scrollRunter' });
+    const anteil = sichtbar / KAMPF.wegZeilen.length;
+    g.fillStyle = PALETTE[DUNKELGRAU]; g.fillRect(247, 132, 4, 88);
+    g.fillStyle = PALETTE[HELLGRAU];
+    g.fillRect(247, 132 + Math.round(88 * KAMPF.wegScroll / Math.max(1, KAMPF.wegZeilen.length)), 4, Math.max(4, Math.round(88 * anteil)));
+  }
+  zeichneKnopf(g, 168, 225, 84, 13, 'Weiter');
+  KAMPF.regionen.push({ x: 168, y: 225, b: 84, h: 13, aktion: 'weiter' });
+  if (SPIELER.herzen <= 0) {
+    zeichneText(g, 'Keine Herzen mehr!', 4, 227, ROT);
+  }
+}
+
+/* ============================================================
+   11. Audio – Soundeffekte und Melodien (Web Audio API)
+   ------------------------------------------------------------
+   Eigene kurze Klänge: Schritte (leise), Treffer, Fehler,
+   Gegenstand gefunden, Sieg – dazu eigene Melodien für Titel
+   und Burg. Der Audio-Kontext startet erst nach der ersten
+   Nutzereingabe (Abschnitt 3). Ton aus/ein mit der M-Taste
+   oder per Tipp auf das Symbol im HUD. */
+
+const AUDIO = { ctx: null, master: null, an: true, stueck: null, timer: null };
+
+/* Erst nach der ersten Eingabe starten (Autoplay-Sperre) */
+function audioStart() {
+  if (!AUDIO.ctx) {
+    try {
+      const Ktx = window.AudioContext || window.webkitAudioContext;
+      if (Ktx) {
+        AUDIO.ctx = new Ktx();
+        AUDIO.master = AUDIO.ctx.createGain();
+        AUDIO.master.gain.value = AUDIO.an ? 1 : 0;
+        AUDIO.master.connect(AUDIO.ctx.destination);
+      }
+    } catch (fehler) { AUDIO.ctx = null; }
+  }
+  if (AUDIO.ctx && AUDIO.ctx.state === 'suspended') AUDIO.ctx.resume();
+}
+
+/* Ein kurzer Ton: Frequenz, Dauer, Wellenform, Lautstärke, Verzögerung */
+function ton(freq, dauer, form, vol, verz) {
+  const ctx = AUDIO.ctx;
+  if (!ctx || !AUDIO.master) return;
+  const t = ctx.currentTime + (verz || 0);
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.type = form || 'square';
+  osc.frequency.value = freq;
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dauer);
+  osc.connect(g);
+  g.connect(AUDIO.master);
+  osc.start(t);
+  osc.stop(t + dauer);
+}
+
+function effekt(name) {
+  if (!AUDIO.ctx) return;
+  if (name === 'schritt') {
+    ton(110, 0.035, 'triangle', 0.02);
+  } else if (name === 'treffer') {
+    ton(660, 0.09, 'square', 0.05);
+    ton(880, 0.12, 'square', 0.05, 0.08);
+  } else if (name === 'fehler') {
+    ton(220, 0.16, 'sawtooth', 0.05);
+    ton(160, 0.24, 'sawtooth', 0.05, 0.12);
+  } else if (name === 'gegenstand') {
+    ton(523, 0.1, 'square', 0.05);
+    ton(659, 0.1, 'square', 0.05, 0.1);
+    ton(784, 0.16, 'square', 0.05, 0.2);
+  } else if (name === 'sieg') {
+    ton(523, 0.12, 'square', 0.05);
+    ton(659, 0.12, 'square', 0.05, 0.12);
+    ton(784, 0.12, 'square', 0.05, 0.24);
+    ton(1046, 0.3, 'square', 0.05, 0.36);
+  }
+}
+
+/* Eigene kurze Melodien: [Frequenz, Schläge], 0 = Pause */
+const MUSIK_TAKT = 0.16;
+const MUSIK = {
+  titel: [
+    [523, 1], [659, 1], [784, 1], [659, 1], [880, 1], [784, 1], [659, 1], [0, 1],
+    [587, 1], [698, 1], [880, 1], [698, 1], [784, 2], [0, 2]
+  ],
+  burg: [
+    [440, 1], [523, 1], [440, 1], [349, 1], [392, 1], [330, 1], [349, 1], [0, 1],
+    [440, 1], [349, 1], [330, 1], [294, 2], [0, 2]
+  ]
+};
+
+/* Hintergrundmusik starten/stoppen (wird je Zustand gewünscht) */
+function musikSetzen(name) {
+  if (AUDIO.stueck === name) return;
+  AUDIO.stueck = name;
+  if (AUDIO.timer) { clearTimeout(AUDIO.timer); AUDIO.timer = null; }
+  if (!name) return;
+  const spiele = function () {
+    if (AUDIO.stueck !== name) return;
+    const melodie = MUSIK[name];
+    let t = 0;
+    for (let i = 0; i < melodie.length; i++) {
+      if (melodie[i][0] > 0) {
+        ton(melodie[i][0], melodie[i][1] * MUSIK_TAKT * 0.85,
+          name === 'burg' ? 'triangle' : 'square', 0.03, t);
+      }
+      t += melodie[i][1] * MUSIK_TAKT;
+    }
+    if (typeof setTimeout === 'function') {
+      AUDIO.timer = setTimeout(spiele, t * 1000);
+    }
+  };
+  spiele();
+}
+function musikAktualisieren() {
+  let wunsch = null;
+  if (SPIEL.zustand === 'titel') wunsch = 'titel';
+  else if (SPIEL.zustand === 'welt' && BILDSCHIRME[SPIELER.bildschirm].gebietIndex === 4) wunsch = 'burg';
+  else if (SPIEL.zustand === 'kampf' && KAMPF && GEBIETE[KAMPF.gebietIndex].boss) wunsch = 'burg';
+  if (wunsch !== AUDIO.stueck) musikSetzen(wunsch);
+}
+
+/* Ton an/aus: M-Taste oder Tipp auf das HUD-Symbol */
+function tonUmschalten() {
+  AUDIO.an = !AUDIO.an;
+  if (AUDIO.master) AUDIO.master.gain.value = AUDIO.an ? 1 : 0;
+  nachricht(AUDIO.an ? 'Ton an.' : 'Ton aus.');
+}
+
+/* HUD-Symbole für Ton an/aus */
+const TON_AN = spriteErzeugen([
+  '........',
+  '...11.1.',
+  '..111..1',
+  '.1111.1.',
+  '.1111.1.',
+  '..111..1',
+  '...11.1.',
+  '........'
+]);
+const TON_AUS = spriteErzeugen([
+  '........',
+  '...11...',
+  '..111...',
+  '.1111...',
+  '.1111...',
+  '..111...',
+  '...11...',
+  '........'
+].map(function (z) { return z.replace(/1/g, '4'); }));
+
+/* ============================================================
+   12. Spiel – Zustandsmaschine, Steuerung, HUD, Hauptschleife
+   ============================================================
+   Zustände: titel → welt ↔ kampf → gameover / ende */
+
+const SPIEL = {
+  zustand: 'titel',
+  niveauIndex: 1,          // leicht / standard / plus (wirkt erst später)
+  wechsel: null,           // laufender Bildschirmwechsel
+  frame: 0,
+  meldungen: [],           // { text, dauer } – Zeile unten im HUD
+  statistik: null,         // Auswertung für den Endbildschirm (Abschnitt 6)
+  endZeit: 0,              // Zeitpunkt des Boss-Siegs
+  seiten: [], seite: 0, danach: null   // Intro-Seiten (Geschichte, Anleitung)
+};
+const GEBIET_ZUSTAND = [];
+const MINI_FARBEN = [GRUEN, DUNKELGRUEN, BLAU, GRAU, ROT];
+let TITEL_BEREICHE = [];
+
+function nachricht(text) {
+  SPIEL.meldungen.push({ text: text, dauer: 170 });
+}
+
+function neuesSpiel() {
+  GEBIETE.forEach(function (_, gi) { gebietZuruecksetzen(gi); });
+  SPIELER.bildschirm = 0;
+  SPIELER.x = 112; SPIELER.y = 80;
+  SPIELER.blick = 'unten'; SPIELER.laufTimer = 0; SPIELER.schritt = 0;
+  SPIELER.herzen = maxHerzen();
+  SPIELER.unverwundbar = 0;
+  SPIELER.blinkDauer = 0;
+  SPIELER.gegenstaende = [];
+  SPIEL.meldungen = [];
+  SPIEL.wechsel = null;
+  SPIEL.zustand = 'welt';
+  /* Auswertung zurücksetzen, Stoppuhr starten (Abschnitt 6) */
+  SPIEL.statistik = {
+    start: Date.now(),
+    jeVerfahren: {
+      grafisch: [0, 0], gleichsetzen: [0, 0],
+      einsetzen: [0, 0], addition: [0, 0]
+    },
+    sonderfall: [0, 0],   /* richtig, falsch */
+    wahl: [0, 0]          /* Verfahrenswahl im Bosskampf */
+  };
+  SPIEL.endZeit = 0;
+  /* Einleitungssatz zum Startgebiet (Abschnitt 6) */
+  GEBIET_ZUSTAND[0].betreten = true;
+  nachricht(GEBIETE[0].text);
+}
+
+/* Nach dem Game over: Neustart am Anfang des aktuellen Gebiets. */
+function starteGebietNeu() {
+  const gi = BILDSCHIRME[SPIELER.bildschirm].gebietIndex;
+  gebietZuruecksetzen(gi);
+  GEBIET_ZUSTAND[gi].betreten = true;   /* Gebiets-Text nicht erneut zeigen */
+  SPIELER.bildschirm = GEBIETE[gi].startBildschirm;
+  SPIELER.x = 112; SPIELER.y = 80;
+  SPIELER.herzen = maxHerzen();
+  SPIELER.unverwundbar = 60;
+  SPIELER.blinkDauer = 60;
+  SPIEL.meldungen = [];
+  SPIEL.wechsel = null;
+  SPIEL.zustand = 'welt';
+}
+
+/* ---------- Steuerung: Tastatur und Touch ---------- */
+const TASTEN = { hoch: false, runter: false, links: false, rechts: false };
+let ereignisse = [];   // Einmal-Ereignisse: 'hoch', 'runter', 'enter', 'niederlage'
+
+window.addEventListener('keydown', function (e) {
+  audioStart();                       /* Audio erst nach Eingabe (Abschnitt 3) */
+  if (SPIEL.zustand === 'kampf') { kampfTastatur(e); return; }
+  const k = e.key;
+  if (k === 'm' || k === 'M') { tonUmschalten(); return; }
+  if (k === 'ArrowUp' || k === 'w' || k === 'W') {
+    TASTEN.hoch = true; if (!e.repeat) ereignisse.push('hoch'); e.preventDefault();
+  } else if (k === 'ArrowDown' || k === 's' || k === 'S') {
+    TASTEN.runter = true; if (!e.repeat) ereignisse.push('runter'); e.preventDefault();
+  } else if (k === 'ArrowLeft' || k === 'a' || k === 'A') {
+    TASTEN.links = true; if (!e.repeat) ereignisse.push('links'); e.preventDefault();
+  } else if (k === 'ArrowRight' || k === 'd' || k === 'D') {
+    TASTEN.rechts = true; if (!e.repeat) ereignisse.push('rechts'); e.preventDefault();
+  } else if (k === 'Enter') {
+    if (!e.repeat) ereignisse.push('enter'); e.preventDefault();
+  } else if (k === ' ') {
+    e.preventDefault();
+  }
+});
+window.addEventListener('keyup', function (e) {
+  const k = e.key;
+  if (k === 'ArrowUp' || k === 'w' || k === 'W') TASTEN.hoch = false;
+  else if (k === 'ArrowDown' || k === 's' || k === 'S') TASTEN.runter = false;
+  else if (k === 'ArrowLeft' || k === 'a' || k === 'A') TASTEN.links = false;
+  else if (k === 'ArrowRight' || k === 'd' || k === 'D') TASTEN.rechts = false;
+});
+window.addEventListener('blur', function () {
+  TASTEN.hoch = TASTEN.runter = TASTEN.links = TASTEN.rechts = false;
+});
+
+/* Touch-Steuerkreuz und A-Taste (nur auf Touch-Geräten sichtbar). */
+if (IST_TOUCH) document.getElementById('touch').style.display = 'block';
+function knopfVerhalten(id, taste, ereignis) {
+  const el = document.getElementById(id);
+  const an = function (e) {
+    e.preventDefault();
+    audioStart();                     /* Audio erst nach Eingabe (Abschnitt 3) */
+    if (taste) TASTEN[taste] = true;
+    if (ereignis) ereignisse.push(ereignis);
+  };
+  const aus = function (e) {
+    e.preventDefault();
+    if (taste) TASTEN[taste] = false;
+  };
+  el.addEventListener('touchstart', an, { passive: false });
+  el.addEventListener('touchend', aus, { passive: false });
+  el.addEventListener('touchcancel', aus, { passive: false });
+  el.addEventListener('mousedown', an);
+  el.addEventListener('mouseup', aus);
+  el.addEventListener('mouseleave', aus);
+}
+knopfVerhalten('t-hoch', 'hoch', 'hoch');
+knopfVerhalten('t-runter', 'runter', 'runter');
+knopfVerhalten('t-links', 'links', 'links');
+knopfVerhalten('t-rechts', 'rechts', 'rechts');
+knopfVerhalten('t-a', null, 'enter');
+document.body.addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
+
+/* Antippen des Spielfelds (Kampfschaltflächen, Titelauswahl). */
+function spielKoordinaten(e) {
+  const r = SPIELLEINWAND.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / MASSSTAB, y: (e.clientY - r.top) / MASSSTAB };
+}
+function verarbeiteTipp(p) {
+  if (SPIEL.zustand === 'kampf') {
+    kampfTipp(p);
+  } else if (SPIEL.zustand === 'welt') {
+    /* Ton-Symbol im HUD antippen: Ton an/aus */
+    if (p.x >= 196 && p.x < 212 && p.y >= 0 && p.y < 16) tonUmschalten();
+  } else if (SPIEL.zustand === 'titel') {
+    for (let i = 0; i < TITEL_BEREICHE.length; i++) {
+      const r = TITEL_BEREICHE[i];
+      if (p.x >= r.x && p.x < r.x + r.b && p.y >= r.y && p.y < r.y + r.h) {
+        if (SPIEL.niveauIndex === i) ereignisse.push('enter');
+        else SPIEL.niveauIndex = i;
+        return;
+      }
+    }
+  } else if (SPIEL.zustand === 'gameover' || SPIEL.zustand === 'ende' || SPIEL.zustand === 'intro') {
+    ereignisse.push('enter');
+  }
+}
+SPIELLEINWAND.addEventListener('touchstart', function (e) {
+  e.preventDefault();
+  audioStart();
+  verarbeiteTipp(spielKoordinaten(e.changedTouches[0]));
+}, { passive: false });
+SPIELLEINWAND.addEventListener('mousedown', function (e) {
+  audioStart();
+  verarbeiteTipp(spielKoordinaten(e));
+});
+
+/* ---------- Welt-Logik ---------- */
+function ausgangRechtsMoeglich() {
+  const i = SPIELER.bildschirm;
+  if (i + 1 >= BILDSCHIRME.length) return false;
+  const gebietHier = BILDSCHIRME[i].gebietIndex;
+  const gebietDort = BILDSCHIRME[i + 1].gebietIndex;
+  /* Zaubertor zwischen zwei Gebieten: erst offen, wenn das Gebiet geschafft ist. */
+  if (gebietHier !== gebietDort && !GEBIET_ZUSTAND[gebietHier].besiegt) return false;
+  return true;
+}
+
+function wechselRechts() {
+  SPIEL.wechsel = {
+    links: SPIELER.bildschirm, rechts: SPIELER.bildschirm + 1,
+    viewStart: 0, viewEnd: 256,
+    pxStart: SPIELER.x, pxEnd: 264,
+    ziel: SPIELER.bildschirm + 1, zielX: 8,
+    schritt: 0
+  };
+}
+function wechselLinks() {
+  SPIEL.wechsel = {
+    links: SPIELER.bildschirm - 1, rechts: SPIELER.bildschirm,
+    viewStart: 256, viewEnd: 0,
+    pxStart: 256 + SPIELER.x, pxEnd: 232,
+    ziel: SPIELER.bildschirm - 1, zielX: 232,
+    schritt: 0
+  };
+}
+
+function aufsammeln() {
+  const bi = SPIELER.bildschirm;
+  const b = BILDSCHIRME[bi];
+  const gi = b.gebietIndex;
+  const z = GEBIET_ZUSTAND[gi], gb = GEBIETE[gi];
+  const bx = SPIELER.x + 3, by = SPIELER.y + 8;
+  /* Gefallene Herzen */
+  for (let i = z.herzFallen.length - 1; i >= 0; i--) {
+    const h = z.herzFallen[i];
+    if (h.bildschirm !== bi) continue;
+    if (bx < h.x + 14 && bx + 10 > h.x + 2 && by < h.y + 15 && by + 7 > h.y + 9) {
+      z.herzFallen.splice(i, 1);
+      if (SPIELER.herzen < maxHerzen()) {
+        SPIELER.herzen++;
+        nachricht('Ein Herz zurück!');
+      } else {
+        nachricht('Deine Herzen sind voll.');
+      }
+    }
+  }
+  /* Gegenstand des Gebiets */
+  if (gb.gegenstandName && z.gegenstandDraussen && !z.gegenstandMitgenommen
+      && gb.gegenstandPos.k === b.karteIndex) {
+    const ix = gb.gegenstandPos.x * 16, iy = gb.gegenstandPos.y * 16;
+    if (bx < ix + 15 && bx + 10 > ix + 1 && by < iy + 15 && by + 7 > iy + 1) {
+      z.gegenstandMitgenommen = true;
+      SPIELER.gegenstaende.push(gb.gegenstandName);
+      /* Ein Satz zum Gegenstand (Abschnitt 6) */
+      nachricht(gb.gegenstandText || ('Du hast das ' + gb.gegenstandName + '!'));
+      effekt('gegenstand');
+    }
+  }
+}
+
+/* Boss-Vorraussetzung: alle Gegner besiegt und alle Gegenstände
+   eingesammelt (Abschnitt 6). Rückgabe: was noch fehlt. */
+function bossBereit() {
+  for (let gi = 0; gi < 4; gi++) {
+    if (!GEBIET_ZUSTAND[gi].besiegt) {
+      return { ok: false, text: 'Es leben noch Monster ' + GEBIETE[gi].textWo + '!' };
+    }
+  }
+  for (let gi = 0; gi < 4; gi++) {
+    const gb = GEBIETE[gi];
+    if (gb.gegenstandName && !GEBIET_ZUSTAND[gi].gegenstandMitgenommen) {
+      return { ok: false, text: 'Das ' + gb.gegenstandName + ' liegt noch ' + gb.textWo + '.' };
+    }
+  }
+  return { ok: true, text: '' };
+}
+
+function pruefeKontakt() {
+  if (SPIELER.unverwundbar > 0) return;
+  const bi = SPIELER.bildschirm;
+  const gi = BILDSCHIRME[bi].gebietIndex;
+  const z = GEBIET_ZUSTAND[gi];
+  for (let i = 0; i < z.monster.length; i++) {
+    const m = z.monster[i];
+    if (!m.lebt || m.eiszeit > 0 || m.bildschirm !== bi) continue;
+    if (SPIELER.x + 3 < m.x + 13 && SPIELER.x + 13 > m.x + 3 &&
+        SPIELER.y + 8 < m.y + 15 && SPIELER.y + 15 > m.y + 8) {
+      /* Der Boss nimmt den Kampf erst an, wenn alles erledigt und
+         gesammelt ist – sonst sagt er, was noch fehlt. */
+      if (GEBIETE[gi].boss) {
+        const info = bossBereit();
+        if (!info.ok) {
+          if (!SPIEL.meldungen.length
+              || SPIEL.meldungen[SPIEL.meldungen.length - 1].text !== info.text) {
+            nachricht(info.text);
+          }
+          return;
+        }
+      }
+      starteKampf(m, gi);
+      return;
+    }
+  }
+}
+
+function tickWelt() {
+  const dx = (TASTEN.rechts ? 1 : 0) - (TASTEN.links ? 1 : 0);
+  const dy = (TASTEN.runter ? 1 : 0) - (TASTEN.hoch ? 1 : 0);
+  if (dx !== 0 || dy !== 0) {
+    const t = CONFIG.SPIELER_TEMPO;
+    if (platzFrei(SPIELER.bildschirm, SPIELER.x + dx * t, SPIELER.y)) SPIELER.x += dx * t;
+    if (platzFrei(SPIELER.bildschirm, SPIELER.x, SPIELER.y + dy * t)) SPIELER.y += dy * t;
+    SPIELER.laufTimer++;
+    SPIELER.schritt = (SPIELER.laufTimer >> 3) & 1;
+    /* Leise Schritte (Etappe 3, Web Audio) */
+    if (++SPIELER.schrittTimer >= 14) { SPIELER.schrittTimer = 0; effekt('schritt'); }
+    if (dx > 0) SPIELER.blick = 'rechts';
+    else if (dx < 0) SPIELER.blick = 'links';
+    else if (dy > 0) SPIELER.blick = 'unten';
+    else if (dy < 0) SPIELER.blick = 'oben';
+  } else {
+    SPIELER.laufTimer = 0; SPIELER.schritt = 0;
+    SPIELER.schrittTimer = 12;
+  }
+  /* Bildschirmwechsel am Rand (Abschnitt 4). */
+  if (dx > 0 && SPIELER.x >= 240 && ausgangRechtsMoeglich()) wechselRechts();
+  else if (dx < 0 && SPIELER.x <= 0 && SPIELER.bildschirm > 0) wechselLinks();
+
+  aktualisiereMonster();
+  aufsammeln();
+  pruefeKontakt();
+}
+
+function tickTitel() {
+  for (let i = 0; i < ereignisse.length; i++) {
+    const e = ereignisse[i];
+    if (e === 'hoch') SPIEL.niveauIndex = (SPIEL.niveauIndex + 2) % 3;
+    else if (e === 'runter') SPIEL.niveauIndex = (SPIEL.niveauIndex + 1) % 3;
+    else if (e === 'enter') { starteIntro(geschichteSeiten(), neuesSpiel); return; }
+  }
+}
+
+/* Intro-Zustand: Seiten mit Geschichte und Anleitung, Weiter mit Enter / A / Antippen. */
+function tickIntro() {
+  for (let i = 0; i < ereignisse.length; i++) {
+    if (ereignisse[i] === 'enter') {
+      SPIEL.seite++;
+      if (SPIEL.seite >= SPIEL.seiten.length) {
+        const danach = SPIEL.danach;
+        SPIEL.seiten = []; SPIEL.seite = 0; SPIEL.danach = null;
+        if (danach) danach();
+      }
+      return;
+    }
+  }
+}
+
+function tick() {
+  SPIEL.frame++;
+  if (SPIELER.unverwundbar > 0) SPIELER.unverwundbar--;
+  if (SPIELER.blinkDauer > 0) SPIELER.blinkDauer--;
+  if (SPIEL.meldungen.length > 0 && --SPIEL.meldungen[0].dauer <= 0) SPIEL.meldungen.shift();
+  musikAktualisieren();   /* Titel- und Burg-Melodie je Zustand */
+
+  /* Bildschirmwechsel läuft ab: Welt steht kurz still. */
+  if (SPIEL.zustand === 'welt' && SPIEL.wechsel) {
+    SPIEL.wechsel.schritt++;
+    if (SPIEL.wechsel.schritt >= CONFIG.WECHSEL_DAUER) {
+      const altGebiet = BILDSCHIRME[SPIELER.bildschirm].gebietIndex;
+      SPIELER.bildschirm = SPIEL.wechsel.ziel;
+      SPIELER.x = SPIEL.wechsel.zielX;
+      SPIEL.wechsel = null;
+      /* Ein Satz beim Betreten eines neuen Gebiets (Abschnitt 6) */
+      const neuGebiet = BILDSCHIRME[SPIELER.bildschirm].gebietIndex;
+      if (neuGebiet !== altGebiet && !GEBIET_ZUSTAND[neuGebiet].betreten) {
+        GEBIET_ZUSTAND[neuGebiet].betreten = true;
+        nachricht(GEBIETE[neuGebiet].text);
+        /* Erklär-Seite zum neuen Gebiet (Geschichte + Verfahren) */
+        starteIntro([GEBIET_SEITEN[neuGebiet]], function () { SPIEL.zustand = 'welt'; });
+      }
+    }
+    ereignisse = [];
+    return;
+  }
+
+  switch (SPIEL.zustand) {
+    case 'titel': tickTitel(); break;
+    case 'intro': tickIntro(); break;
+    case 'welt': tickWelt(); break;
+    case 'kampf':
+      tickKampf();
+      break;
+    case 'gameover':
+      if (ereignisse.indexOf('enter') >= 0) starteGebietNeu();
+      break;
+    case 'ende':
+      if (ereignisse.indexOf('enter') >= 0) SPIEL.zustand = 'titel';
+      break;
+  }
+  ereignisse = [];
+}
+
+/* ---------- Zeichnen ---------- */
+function bildschirmZeichnen(bi, offsetX) {
+  const b = BILDSCHIRME[bi];
+  const besiegt = GEBIET_ZUSTAND[b.gebietIndex].besiegt;
+  for (let ty = 0; ty < CONFIG.FELD_HOEHE; ty++) {
+    for (let tx = 0; tx < CONFIG.FELD_BREITE; tx++) {
+      let code = b.karte[ty][tx];
+      if (code === 'x' && besiegt) code = 'p';   // Zaubertor ist verschwunden
+      /* Wände: 8 Varianten (Fackeln bleiben selten), unten keine Fackel */
+      let variante = kachelVariante(tx, ty, bi, code === '#' ? 8 : 4);
+      if (code === '#' && ty === CONFIG.FELD_HOEHE - 1 && variante === 0) variante = 1;
+      KONTEXT.drawImage(
+        kachel(b.gebiet.id, code, variante,
+          kachelFrame(code, tx, ty), kachelRand(code, b.karte, tx, ty)),
+        offsetX + tx * CONFIG.KACHEL,
+        CONFIG.HUD_HOEHE + ty * CONFIG.KACHEL);
+    }
+  }
+}
+
+function inhaltZeichnen(bi, offsetX) {
+  const g = KONTEXT;
+  const b = BILDSCHIRME[bi];
+  const gi = b.gebietIndex;
+  const gb = GEBIETE[gi];
+  const z = GEBIET_ZUSTAND[gi];
+  const y0 = CONFIG.HUD_HOEHE;
+  /* Gefallene Herzen */
+  for (let i = 0; i < z.herzFallen.length; i++) {
+    const h = z.herzFallen[i];
+    if (h.bildschirm !== bi) continue;
+    zeichneSprite(g, HERZ_VOLL, offsetX + h.x + 4,
+      y0 + h.y + 4 + (((SPIEL.frame + i * 9) >> 4) & 1));
+  }
+  /* Gegenstand des Gebiets (erscheint nach dem letzten Monster):
+     schwebt 1 px, hat einen Glanzschein und einen wandernden Glanzpunkt */
+  if (gb.gegenstandName && z.gegenstandDraussen && !z.gegenstandMitgenommen
+      && gb.gegenstandPos.k === b.karteIndex) {
+    const p = gb.gegenstandPos;
+    const ix = offsetX + p.x * 16 + 4;
+    const iy = y0 + p.y * 16 + 3 + (((SPIEL.frame >> 4) & 1));
+    dither(g, ix - 2, iy - 2, 12, 12, 'rgba(255,246,207,0.16)');
+    zeichneSprite(g, ICONS[gb.gegenstandName], ix, iy);
+    const gl = glitzerPixel(ICONS[gb.gegenstandName], SPIEL.frame);
+    if (gl) { g.fillStyle = PALETTE[GLANZ]; g.fillRect(ix + gl[0], iy + gl[1], 1, 1); }
+  }
+  /* Monster: Schattenfleck am Boden, Figur schwebt leicht darüber */
+  for (let i = 0; i < z.monster.length; i++) {
+    const m = z.monster[i];
+    if (!m.lebt || m.bildschirm !== bi) continue;
+    schattenZeichnen(g, offsetX + m.x + 8, y0 + m.y + 15, 12);
+    zeichneSprite(g, MONSTER_SPRITES[gb.id], offsetX + m.x,
+      y0 + m.y + (((SPIEL.frame + i * 13) >> 4) & 1));
+  }
+}
+
+function miraZeichnen(x, y) {
+  /* Schattenfleck unter Mira (bleibt auch beim Blinken sichtbar) */
+  schattenZeichnen(KONTEXT, x + 8, CONFIG.HUD_HOEHE + y + 15, 10);
+  if (SPIELER.blinkDauer > 0 && ((SPIEL.frame >> 2) & 1) === 0) return;  // Blinken nur nach Herzverlust
+  const basis = SPIELER.blick === 'rechts' ? 'links' : SPIELER.blick;
+  /* sanfte Idle-Animation: Atmen/Wippen im Stand (2 Frames) */
+  const atem = (SPIELER.schritt === 0) ? ((SPIEL.frame >> 5) & 1) : 0;
+  zeichneSprite(KONTEXT, MIRA[basis][SPIELER.schritt],
+    x, CONFIG.HUD_HOEHE + y + atem, SPIELER.blick === 'rechts');
+}
+
+/* HUD-Hintergrund einmal vorrendern: dezenter Verlauf per Dithering,
+   Facette (hell oben, dunkel unten) – schont das iPad-Tempo. */
+let HUD_CANVAS = null;
+function hudHintergrund() {
+  if (!HUD_CANVAS) {
+    HUD_CANVAS = document.createElement('canvas');
+    HUD_CANVAS.width = CONFIG.BREITE; HUD_CANVAS.height = CONFIG.HUD_HOEHE;
+    const h = HUD_CANVAS.getContext('2d');
+    const F = PALETTE;
+    h.fillStyle = F[DUNKELGRAU]; h.fillRect(0, 0, 256, CONFIG.HUD_HOEHE);
+    /* Verlauf: oben etwas heller (Dithering in zwei Dichten) */
+    dither(h, 0, 0, 256, 2, F[GRAU]);
+    h.fillStyle = F[GRAU];
+    for (let y = 2; y < 8; y++) {
+      for (let x = 0; x < 256; x++) {
+        if ((x + y) % 4 === 0) h.fillRect(x, y, 1, 1);
+      }
+    }
+    /* unten dunkler */
+    dither(h, 0, 52, 256, 6, F[NACHT]);
+    dither(h, 0, 58, 256, 4, F[NACHT]);
+    h.fillStyle = F[NACHT]; h.fillRect(0, 62, 256, 2);
+    /* Facette: helle Kante ganz oben */
+    h.fillStyle = F[HELLGRAU]; h.fillRect(0, 0, 256, 1);
+  }
+  return HUD_CANVAS;
+}
+
+function zeichneHUD(g) {
+  const bi = SPIELER.bildschirm;
+  const b = BILDSCHIRME[bi];
+  g.drawImage(hudHintergrund(), 0, 0);
+  /* Herzen mit Glanzpunkt; das letzte Herz pulsiert (1 px Wippen) */
+  for (let i = 0; i < maxHerzen(); i++) {
+    const voll = i < SPIELER.herzen;
+    let hy = 4;
+    if (voll && SPIELER.herzen === 1) hy -= ((SPIEL.frame >> 3) & 1);
+    g.drawImage(voll ? HERZ_VOLL : HERZ_LEER, 4 + i * 9, hy);
+  }
+  /* Gebietsname */
+  zeichneText(g, b.gebiet.name, 252 - b.gebiet.name.length * 8, 4, GELB);
+  /* Niveau und Monster */
+  zeichneText(g, 'Niveau: ' + NIVEAUS[SPIEL.niveauIndex], 4, 16, HELLGRAU);
+  const z = GEBIET_ZUSTAND[b.gebietIndex];
+  const anzahl = z.monster.filter(function (m) { return m.lebt; }).length;
+  if (anzahl === 0) {
+    zeichneText(g, 'Geschafft!', 252 - 10 * 8, 16, HELLGRUEN);
+  } else {
+    zeichneText(g, 'Monster: ' + anzahl, 252 - ('Monster: ' + anzahl).length * 8, 16, WEISS);
+  }
+  /* Vier Fächer für die Gegenstände: Slots mit Innenschatten */
+  for (let i = 0; i < 4; i++) {
+    const x = 4 + i * 17, y = 28;
+    g.fillStyle = PALETTE[NACHT]; g.fillRect(x - 1, y - 1, 15, 15);
+    g.fillStyle = PALETTE[SCHWARZ]; g.fillRect(x, y, 13, 13);
+    g.fillStyle = PALETTE[NACHT];
+    g.fillRect(x, y, 13, 1); g.fillRect(x, y, 1, 13);
+    g.fillStyle = PALETTE[GRAU];
+    g.fillRect(x, y + 12, 13, 1); g.fillRect(x + 12, y, 1, 13);
+    if (GEBIETE[i].gegenstandName && GEBIET_ZUSTAND[i].gegenstandMitgenommen) {
+      g.drawImage(ICONS[GEBIETE[i].gegenstandName], x + 2, y + 2);
+    }
+  }
+  /* Minikarte: 9 Bildschirme, aktuelles Gebiet blinkt */
+  for (let i = 0; i < BILDSCHIRME.length; i++) {
+    const x = 168 + i * 9, y = 28;
+    const gi = BILDSCHIRME[i].gebietIndex;
+    g.fillStyle = PALETTE[MINI_FARBEN[gi]];
+    g.fillRect(x, y, 8, 8);
+    if (!GEBIET_ZUSTAND[gi].besiegt) {
+      g.fillStyle = 'rgba(0,0,0,0.45)';
+      g.fillRect(x, y, 8, 8);
+    }
+    if (i === bi) {
+      g.fillStyle = PALETTE[WEISS];
+      g.fillRect(x - 1, y - 1, 10, 1); g.fillRect(x - 1, y + 8, 10, 1);
+      g.fillRect(x - 1, y - 1, 1, 10); g.fillRect(x + 8, y - 1, 1, 10);
+    }
+  }
+  /* Rahmen um die Minikarte als Ganzes */
+  g.fillStyle = PALETTE[DUNKELGRAU];
+  g.fillRect(167, 27, 82, 1); g.fillRect(167, 37, 82, 1);
+  g.fillRect(167, 27, 1, 11); g.fillRect(248, 27, 1, 11);
+  /* Ton-Symbol: an/aus per M-Taste oder antippen (Etappe 3) */
+  g.drawImage(AUDIO.an ? TON_AN : TON_AUS, 200, 4);
+  /* Meldung, bei Bedarf zwei Zeilen */
+  if (SPIEL.meldungen.length > 0) {
+    const zeilen = textUmbruch(SPIEL.meldungen[0].text, 30).slice(0, 2);
+    for (let i = 0; i < zeilen.length; i++) {
+      zeichneTextMitte(g, zeilen[i], 60 - zeilen.length * 8 + i * 8, GELB);
+    }
+  }
+}
+
+function zeichneWelt() {
+  const g = KONTEXT;
+  g.fillStyle = PALETTE[SCHWARZ]; g.fillRect(0, 0, 256, 240);
+  if (SPIEL.wechsel) {
+    const w = SPIEL.wechsel;
+    const t = w.schritt / CONFIG.WECHSEL_DAUER;
+    const view = Math.round(w.viewStart + (w.viewEnd - w.viewStart) * t);
+    bildschirmZeichnen(w.links, -view);
+    bildschirmZeichnen(w.rechts, 256 - view);
+    inhaltZeichnen(w.links, -view);
+    inhaltZeichnen(w.rechts, 256 - view);
+    const px = w.pxStart + (w.pxEnd - w.pxStart) * t;
+    miraZeichnen(px - view, SPIELER.y);
+    /* weicher Übergang: kurzer, dezenter Farbblitz an den Rändern */
+    const kante = 1 - t;
+    if (kante > 0.1) {
+      g.fillStyle = 'rgba(238,240,242,' + (0.28 * kante).toFixed(3) + ')';
+      g.fillRect(256 - view - 1, CONFIG.HUD_HOEHE, 2, 176);
+      g.fillRect(-view, CONFIG.HUD_HOEHE, 1, 176);
+    }
+  } else {
+    weltOptikPruefen(SPIELER.bildschirm);
+    bildschirmZeichnen(SPIELER.bildschirm, 0);
+    inhaltZeichnen(SPIELER.bildschirm, 0);
+    miraZeichnen(SPIELER.x, SPIELER.y);
+    /* Staub beim Laufen (rein optisch, farblich passend zum Gebiet) */
+    const bewegt = Math.abs(SPIELER.x - VISUELL.miraX) + Math.abs(SPIELER.y - VISUELL.miraY) > 0.01;
+    if (bewegt && SPIEL.frame % 7 === 0) {
+      const staub = [SANDMITTE, SANDMITTE, SANDMITTE, HELLGRAU, HELLGRAU]
+        [BILDSCHIRME[SPIELER.bildschirm].gebietIndex];
+      partikel('welt', SPIELER.x + 8 + zg(-3, 3), CONFIG.HUD_HOEHE + SPIELER.y + 14,
+        zg(-2, 2) / 14, -0.2 - Math.random() * 0.2, 12 + zg(0, 6), staub, 'staub');
+    }
+  }
+  VISUELL.miraX = SPIELER.x; VISUELL.miraY = SPIELER.y;
+  partikelZeichnen(g, 'welt');
+  zeichneHUD(g);
+}
+
+/* ---------- Vollbildschirme: Sternenhimmel, Rahmen, Titel-Kontur ----------
+   Der Hintergrund (sanfter Pixel-Verlauf per Dithering von MondBlau nach
+   Nacht, dazu funkelnde Sterne) wird vorgerendert und langsam
+   umgeschaltet. Titeltexte bekommen eine dunkle Kontur und Schatten. */
+const HIMMEL_CANVAS = [];
+function nachtHimmel(variante) {
+  if (!HIMMEL_CANVAS.length) {
+    for (let v = 0; v < 2; v++) {
+      const c = document.createElement('canvas');
+      c.width = CONFIG.BREITE; c.height = CONFIG.HOEHE;
+      const h = c.getContext('2d');
+      /* Verlauf MONDBLAU → NACHT in Dither-Stufen (Sanfter Pixel-Verlauf) */
+      h.fillStyle = PALETTE[MONDBLAU]; h.fillRect(0, 0, 256, 240);
+      h.fillStyle = PALETTE[NACHT];
+      for (let y = 0; y < 240; y++) {
+        const t = y / 240;
+        const stufe = t < 0.18 ? 0 : t < 0.42 ? 1 : t < 0.66 ? 2 : t < 0.88 ? 3 : 4;
+        if (stufe > 0) {
+          for (let x = 0; x < 256; x++) {
+            if (((x + y) % 4) < stufe) h.fillRect(x, y, 1, 1);
+          }
+        }
+      }
+      /* Sterne: feste Positionen, in Variante B funkeln andere (2 Frames) */
+      for (let i = 0; i < 46; i++) {
+        const sx = Math.floor(rauschen(i, 1, 77) * 252) + 4;
+        const sy = Math.floor(rauschen(i, 2, 77) * 200);
+        const hell = rauschen(i, 4, 77);
+        const sichtbar = v === 0 ? hell < 0.85 : hell > 0.15;
+        if (!sichtbar) continue;
+        const r = rauschen(i, 5, 77);
+        h.fillStyle = PALETTE[r < 0.3 ? GLANZ : (r < 0.6 ? WEISS : HELLGRAU)];
+        h.fillRect(sx, sy, 1, 1);
+        if (rauschen(i, 3, 77) > 0.8) {
+          h.fillRect(sx - 1, sy, 1, 1); h.fillRect(sx + 1, sy, 1, 1);
+          h.fillRect(sx, sy - 1, 1, 1); h.fillRect(sx, sy + 1, 1, 1);
+        }
+      }
+      HIMMEL_CANVAS.push(c);
+    }
+  }
+  return HIMMEL_CANVAS[variante & 1];
+}
+
+/* Doppelrahmen im Stil des HUD (hell außen, dunkle Innenlinie). */
+function rahmenZeichnen(g) {
+  const F = PALETTE;
+  g.fillStyle = F[GRAU];
+  g.fillRect(2, 2, 252, 1); g.fillRect(2, 237, 252, 1);
+  g.fillRect(2, 2, 1, 236); g.fillRect(253, 2, 1, 236);
+  g.fillStyle = F[NACHT];
+  g.fillRect(3, 3, 250, 1); g.fillRect(3, 236, 250, 1);
+  g.fillRect(3, 3, 1, 234); g.fillRect(252, 3, 1, 234);
+}
+
+/* Titelzeile mit dunkler Kontur und Schatten (hoher Kontrast). */
+function textMitKontur(g, text, y, farbe, skala) {
+  const x = Math.floor((CONFIG.BREITE - textBreite(text, skala)) / 2);
+  zeichneText(g, text, x + 1, y + 1, DUNKELVIOLETT, skala);
+  zeichneText(g, text, x - 1, y - 1, DUNKELVIOLETT, skala);
+  zeichneText(g, text, x + 1, y - 1, DUNKELVIOLETT, skala);
+  zeichneText(g, text, x - 1, y + 1, DUNKELVIOLETT, skala);
+  zeichneText(g, text, x, y + 2, DUNKELVIOLETT, skala);
+  zeichneText(g, text, x, y, farbe, skala);
+}
+
+function zeichneTitel() {
+  const g = KONTEXT;
+  g.drawImage(nachtHimmel((SPIEL.frame >> 5) & 1), 0, 0);
+  rahmenZeichnen(g);
+  textMitKontur(g, 'MIRA UND DIE', 16, GELB, 2);
+  textMitKontur(g, 'KREUZUNGEN', 36, WEISS, 2);
+  const story = [
+    'Im Land Lineara kreuzen sich',
+    'alle Wege an genau einem Punkt.',
+    'Ein Zauber hat die Kreuzungen',
+    'verwirrt. Hilf Mira, die',
+    'Schnittpunkte wiederfinden!'
+  ];
+  for (let i = 0; i < story.length; i++) zeichneTextMitte(g, story[i], 66 + i * 10, HELLGRAU);
+  zeichneTextMitte(g, 'Wähle dein Niveau:', 124, WEISS);
+  TITEL_BEREICHE = [];
+  for (let i = 0; i < NIVEAUS.length; i++) {
+    const y = 136 + i * 11;
+    const ausgewaehlt = (i === SPIEL.niveauIndex);
+    zeichneTextMitte(g, NIVEAUS[i], y, ausgewaehlt ? GELB : HELLGRAU);
+    if (ausgewaehlt) {
+      zeichneText(g, '>', Math.floor((256 - NIVEAUS[i].length * 8) / 2) - 12, y, GELB);
+    }
+    TITEL_BEREICHE.push({ x: 80, y: y, b: 96, h: 11 });
+  }
+  zeichneTextMitte(g,
+    IST_TOUCH ? 'Steuerkreuz: Laufen, A: Wählen' : 'Pfeiltasten oder WASD: Laufen',
+    176, HELLGRAU);
+  zeichneTextMitte(g,
+    IST_TOUCH ? 'Antippen wählt das Niveau' : 'Enter: Bestätigen',
+    188, HELLGRAU);
+  zeichneTextMitte(g, 'M: Ton an/aus', 200, HELLGRAU);
+  if ((SPIEL.frame >> 4) & 1) zeichneTextMitte(g, 'Enter: Spiel starten', 212, GELB);
+  zeichneSprite(g, MIRA.unten[0], 24, 214);
+  zeichneSprite(g, MONSTER_SPRITES.burg, 216, 214);
+}
+
+/* ---------- Geschichte und Anleitung (Intro-Seiten) ----------
+   Jede Seite: titel, zeilen (höchstens 30 Zeichen, höchstens 11 Zeilen),
+   sprite (Gebiets-Id des Monsters, optional). */
+function geschichteSeiten() {
+  const steuerung = IST_TOUCH
+    ? ['Mit dem Steuerkreuz läufst du.', 'Mit A bestätigst du.']
+    : ['Mit Pfeiltasten oder WASD', 'läufst du. Enter bestätigt.'];
+  return [
+    { titel: 'LINEARA', sprite: 'wiese', zeilen: [
+      'Im Land Lineara führen alle',
+      'Wege zu genau einem Punkt:',
+      'zur Kreuzung. Dort treffen',
+      'sich Wanderer, Händler und',
+      'Kinder aus allen Dörfern.'
+    ] },
+    { titel: 'DER ZAUBER', sprite: 'burg', zeilen: [
+      'Doch eines Nachts kam der',
+      'Wirrzauberer und verhexte',
+      'alle Kreuzungen. Nun enden',
+      'die Wege im Nichts, und die',
+      'Schnittpunkte sind verloren.'
+    ] },
+    { titel: 'MIRA', sprite: null, zeilen: [
+      'Nur Mira, die Wegfinderin,',
+      'kann das ändern. Sie kennt',
+      'das alte Geheimnis: Zwei',
+      'Wege treffen sich genau da,',
+      'wo beide Gleichungen',
+      'stimmen. Hilf ihr, die',
+      'Schnittpunkte zu finden!'
+    ] },
+    { titel: 'SO SPIELST DU', sprite: null, links: true, zeilen: [
+      '1. Laufe durch Lineara.'
+    ].concat(steuerung.map(function (z) { return '   ' + z; })).concat([
+      '2. Berühre ein Monster. Der',
+      '   Kampf beginnt!',
+      '3. Löse das Gleichungssystem',
+      '   und gib x und y ein.',
+      '4. Richtig: Treffer! Falsch:',
+      '   Du verlierst ein Herz.'
+    ]) },
+    { titel: 'DEIN WEG', sprite: null, zeilen: [
+      'Besiege alle Monster eines',
+      'Gebiets. Dann öffnet sich',
+      'das Zaubertor.',
+      'Sammle in jedem Gebiet den',
+      'Gegenstand ein.',
+      'Gehen die Herzen aus, startest',
+      'du das Gebiet neu.',
+      'Am Ende wartet die Burg!'
+    ] },
+    GEBIET_SEITEN[0]
+  ];
+}
+
+const GEBIET_SEITEN = [
+  { titel: 'DIE WIESE', sprite: 'wiese', zeilen: [
+    'Hier beginnt deine Reise.',
+    'Du siehst zwei Geraden. Lies',
+    'ihren Schnittpunkt ab:',
+    'x nach rechts oder links,',
+    'y nach oben oder unten.',
+    'Laufen die Geraden parallel,',
+    'gibt es keine Lösung. Liegen',
+    'sie aufeinander, gibt es',
+    'unendlich viele Lösungen.'
+  ] },
+  { titel: 'DER WALD', sprite: 'wald', zeilen: [
+    'Im Wald haben sich die Pfade',
+    'verirrt. Löse mit dem',
+    'Gleichsetzungsverfahren:',
+    'Beide Gleichungen sind nach',
+    'derselben Variablen gelöst.',
+    'Setze die rechten Seiten',
+    'gleich, löse die Gleichung',
+    'und berechne dann die zweite',
+    'Variable.'
+  ] },
+  { titel: 'DER SUMPF', sprite: 'sumpf', zeilen: [
+    'Der Sumpf verschleiert die',
+    'Schnittpunkte. Löse mit dem',
+    'Einsetzungsverfahren:',
+    'Eine Gleichung ist schon nach',
+    'x oder y gelöst. Setze sie',
+    'in die andere Gleichung ein,',
+    'löse sie und berechne dann',
+    'die zweite Variable.'
+  ] },
+  { titel: 'DIE HÖHLE', sprite: 'hoehle', zeilen: [
+    'In der Höhle lauern die',
+    'wirrsten Gleichungen. Löse',
+    'mit dem Additionsverfahren:',
+    'Beide Gleichungen stehen in',
+    'Normalform. Addiere sie so,',
+    'dass eine Variable wegfällt.',
+    'Multipliziere vorher, wenn',
+    'es nötig ist.'
+  ] },
+  { titel: 'DIE BURG', sprite: 'burg', zeilen: [
+    'Hier wohnt der Wirrzauberer!',
+    'Er kämpft in vier Phasen.',
+    'Wähle zuerst das geschickteste',
+    'Verfahren, dann löse die',
+    'Aufgabe. Eine andere Wahl',
+    'kostet nichts, bringt aber',
+    'keinen Bonus.',
+    'Du brauchst alle Gegenstände!'
+  ] }
+];
+
+function starteIntro(seiten, danach) {
+  SPIEL.seiten = seiten;
+  SPIEL.seite = 0;
+  SPIEL.danach = danach || null;
+  SPIEL.zustand = 'intro';
+}
+
+function zeichneIntro() {
+  const g = KONTEXT;
+  const s = SPIEL.seiten[SPIEL.seite];
+  g.drawImage(nachtHimmel((SPIEL.frame >> 5) & 1), 0, 0);
+  if (!s) return;
+  rahmenZeichnen(g);
+  textMitKontur(g, s.titel, 14, GELB, 2);
+  for (let i = 0; i < s.zeilen.length; i++) {
+    if (s.links) zeichneText(g, s.zeilen[i], 12, 46 + i * 12, WEISS);
+    else zeichneTextMitte(g, s.zeilen[i], 46 + i * 12, WEISS);
+  }
+  zeichneSprite(g, MIRA.unten[0], 24, 214);
+  if (s.sprite) zeichneSprite(g, MONSTER_SPRITES[s.sprite], 216, 214);
+  zeichneTextMitte(g, (SPIEL.seite + 1) + ' / ' + SPIEL.seiten.length, 200, GRAU);
+  if ((SPIEL.frame >> 4) & 1) {
+    zeichneTextMitte(g, IST_TOUCH ? 'A oder Antippen: Weiter' : 'Enter: Weiter', 214, GELB);
+  }
+}
+
+function zeichneGameover() {
+  const g = KONTEXT;
+  g.drawImage(nachtHimmel((SPIEL.frame >> 5) & 1), 0, 0);
+  rahmenZeichnen(g);
+  textMitKontur(g, 'GAME OVER', 56, ROT, 2);
+  zeichneTextMitte(g, 'Der Zauber war stärker.', 104, WEISS);
+  zeichneTextMitte(g, 'Keine Sorge! Mira versucht es', 118, HELLGRAU);
+  zeichneTextMitte(g, 'am Anfang des Gebiets erneut.', 128, HELLGRAU);
+  if ((SPIEL.frame >> 4) & 1) zeichneTextMitte(g, 'Enter: Weiter', 160, GELB);
+}
+
+/* Übungstipp: schwächstes Verfahren heraussuchen (Abschnitt 6) */
+function uebungsTipp(st) {
+  let schlechteste = null, quote = 1;
+  VERFAHREN_LISTE.forEach(function (v) {
+    const r = st.jeVerfahren[v][0], f = st.jeVerfahren[v][1];
+    if (r + f >= 2 && r / (r + f) < quote) {
+      quote = r / (r + f);
+      schlechteste = v;
+    }
+  });
+  if (schlechteste && quote < 0.7) {
+    return 'Tipp: Übe noch einmal das ' + VERFAHREN_KURZ[schlechteste] + '!';
+  }
+  return 'Du beherrschst alle Verfahren. Gut gemacht!';
+}
+
+function zeichneEnde() {
+  const g = KONTEXT;
+  g.fillStyle = PALETTE[SCHWARZ]; g.fillRect(0, 0, 256, 240);
+  /* Beim Eintritt: Sternchen über dem Bildschirm (Sieg über den Boss) */
+  if (VISUELL.letzterZustand !== 'ende') {
+    for (let i = 0; i < 14; i++) {
+      partikel('ende', zg(16, 240), zg(8, 96), zg(-4, 4) / 14,
+        -0.15 - Math.random() * 0.35, 60 + zg(0, 30), i % 2 ? GELB : GLANZ, 'stern');
+    }
+  }
+  g.drawImage(nachtHimmel((SPIEL.frame >> 5) & 1), 0, 0);
+  rahmenZeichnen(g);
+  textMitKontur(g, 'LINEARA IST', 4, GELB, 2);
+  textMitKontur(g, 'GERETTET!', 24, GELB, 2);
+  /* Abschluss der Story (Abschnitt 6) */
+  zeichneTextMitte(g, 'Der Wirrzauberer ist besiegt.', 46, WEISS);
+  zeichneTextMitte(g, 'Der Zauber weicht: Die Kreuzungen', 56, WEISS);
+  zeichneTextMitte(g, 'von Lineara finden sich wieder.', 66, WEISS);
+  zeichneTextMitte(g, 'Danke, Mira!', 78, HELLGRUEN);
+  /* Auswertung (Abschnitt 6) */
+  zeichneTextMitte(g, 'Auswertung', 92, GELB);
+  const st = SPIEL.statistik;
+  if (st) {
+    let y = 104;
+    /* Trefferquote je Verfahren */
+    VERFAHREN_LISTE.forEach(function (v) {
+      const r = st.jeVerfahren[v][0], f = st.jeVerfahren[v][1];
+      zeichneText(g, VERFAHREN_KURZ[v] + ':', 24, y, WEISS);
+      const quote = r + f > 0 ? r / (r + f) : 1;
+      zeichneText(g, r + ' von ' + (r + f), 196, y, quote < 0.7 ? ROT : HELLGRUEN);
+      y += 8;
+    });
+    zeichneText(g, 'Sonderfälle:', 24, y, WEISS);
+    zeichneText(g, st.sonderfall[0] + ' von ' + (st.sonderfall[0] + st.sonderfall[1]), 196, y, WEISS);
+    y += 8;
+    zeichneText(g, 'Boss-Wahl:', 24, y, WEISS);
+    zeichneText(g, st.wahl[0] + ' von ' + (st.wahl[0] + st.wahl[1]), 196, y, WEISS);
+    y += 8;
+    /* benötigte Zeit */
+    const sek = Math.max(0, Math.floor((SPIEL.endZeit - st.start) / 1000));
+    zeichneText(g, 'Zeit:', 24, y, WEISS);
+    zeichneText(g, Math.floor(sek / 60) + ' min ' + (sek % 60 < 10 ? '0' : '') + (sek % 60) + ' s',
+      196, y, WEISS);
+    y += 8;
+    /* Anzahl der Fehlversuche */
+    const fehl = st.jeVerfahren.grafisch[1] + st.jeVerfahren.gleichsetzen[1]
+      + st.jeVerfahren.einsetzen[1] + st.jeVerfahren.addition[1];
+    zeichneText(g, 'Fehlversuche:', 24, y, WEISS);
+    zeichneText(g, String(fehl), 196, y, fehl === 0 ? HELLGRUEN : WEISS);
+    y += 12;
+    /* kurzer Übungstipp */
+    textUmbruch(uebungsTipp(st), 30).forEach(function (z) {
+      zeichneTextMitte(g, z, y, GELB); y += 8;
+    });
+  }
+  if ((SPIEL.frame >> 4) & 1) zeichneTextMitte(g, 'Enter: Zurück zum Titel', 228, GELB);
+  partikelZeichnen(g, 'ende');
+}
+
+function zeichne() {
+  partikelTick();
+  switch (SPIEL.zustand) {
+    case 'titel': zeichneTitel(); break;
+    case 'intro': zeichneIntro(); break;
+    case 'welt': zeichneWelt(); break;
+    case 'kampf': zeichneKampf(); break;
+    case 'gameover': zeichneGameover(); break;
+    case 'ende': zeichneEnde(); break;
+  }
+  vignetteZeichnen(KONTEXT);
+  VISUELL.letzterZustand = SPIEL.zustand;
+}
+
+/* ---------- Hauptschleife mit festem Zeittakt ---------- */
+let letzteZeit = 0, restZeit = 0;
+function schleife(zeit) {
+  requestAnimationFrame(schleife);
+  if (!letzteZeit) letzteZeit = zeit;
+  let delta = zeit - letzteZeit;
+  letzteZeit = zeit;
+  if (delta > 100) delta = 100;   // Nach Tab-Wechsel nicht aufholen
+  restZeit += delta;
+  while (restZeit >= CONFIG.FRAME_MS) {
+    restZeit -= CONFIG.FRAME_MS;
+    tick();
+  }
+  zeichne();
+}
+requestAnimationFrame(schleife);
+
+/* ============================================================
+   13. Selbsttest – Qualitätssicherung (Abschnitt 12)
+   ============================================================
+   Aufruf: selbsttest() in der Konsole oder index.html?test
+   Prüft: die Referenzaufgaben aus 9.4 mit dem Loeser, je Verfahren
+   und Niveau 200 generierte Aufgaben gegen den Loeser (inkl.
+   Koeffizientenbereich und trivialer Gleichungen), den
+   Eingabe-Parser sowie Karten, Spawns und Schrift aus Etappe 1. */
+
+/* Prüfung einer generierten Aufgabe (Abschnitt 12): Der Loeser
+   muss die vom Generator beabsichtigte Lösung liefern, alle
+   Koeffizienten bleiben im erlaubten Bereich (Beträge höchstens
+   20, außer bei binomischen Formeln), keine Gleichung ist trivial,
+   die Anzeige folgt Abschnitt 8. Rückgabe: null oder Fehlertext. */
+function pruefeGenerierteAufgabe(auf, verfahren, niveau) {
+  const sys = auf.system;
+  const l = loeseSystem(sys);
+  const soll = auf.loesung;
+  if (l.typ !== soll.typ) return 'Loeser sagt ' + l.typ + ', Generator ' + soll.typ;
+  if (auf.sfTyp !== soll.typ) return 'sfTyp (' + auf.sfTyp + ') passt nicht zur Lösung (' + soll.typ + ')';
+  if (soll.typ === 'eindeutig' && (!l.x.gleich(soll.x) || !l.y.gleich(soll.y))) return 'Lösungswerte weichen ab';
+  if (soll.typ === 'unendlich' && (!l.gerade.m.gleich(soll.gerade.m) || !l.gerade.b.gleich(soll.gerade.b))) return 'Gerade weicht ab';
+  const texte = [];
+  for (let i = 0; i < 2; i++) {
+    const g = i === 0 ? sys.g1 : sys.g2;
+    if (g.a.istNull() && g.b.istNull()) return 'Gleichung ' + (i + 1) + ' ist trivial';
+    const t = glAnzeige(g);
+    if (t === '0 = 0') return 'Anzeige „0 = 0"';
+    texte.push(t);
+    if (g.form.typ === 'binomX') {
+      if (Math.abs(g.form.p) > 4 || Math.abs(g.form.q) > 6 || Math.abs(g.form.t) > 20) return 'binomX-Parameter zu groß';
+    } else if (g.form.typ === 'binomY') {
+      if (Math.abs(g.form.q) > 6 || Math.abs(g.form.v) > 20 || Math.abs(g.form.u) > 20) return 'binomY-Parameter zu groß';
+    } else {
+      /* Beträge höchstens 20 (außer bei binomischen Formeln, siehe oben);
+         bei leicht/standard müssen Koeffizienten als endliche
+         Dezimalzahl darstellbar sein (Abschnitt 9.3). */
+      const ks = [g.a, g.b, g.c];
+      for (let j = 0; j < 3; j++) {
+        if (!klein(ks[j], 20)) return 'Koeffizient zu groß: ' + bAnzeigen(ks[j]);
+        if (niveau !== 'plus' && !istSchoen(ks[j])) return 'Koeffizient nicht darstellbar: ' + bAnzeigen(ks[j]);
+      }
+      if (g.form.typ === 'klammer') {
+        const f = bAdd(g.c, bGanz(g.form.u * g.form.d));
+        if (Math.abs(f.z) > 20) return 'klammer: rechte Seite zu groß';
+      }
+    }
+  }
+  if (texte[0] === texte[1]) return 'beide Gleichungen identisch dargestellt';
+  const alles = texte.join(' | ');
+  if (/(^|[^0-9])1[xy]/.test(alles)) return 'Koeffizient 1 angezeigt: ' + alles;
+  if (alles.indexOf('+ −') >= 0) return '„+ −" nicht zusammengefasst: ' + alles;
+  if (/(^|[^0-9])0[xy]/.test(alles)) return 'Term mit Faktor 0: ' + alles;
+  return null;
+}
+
+function selbsttest() {
+  const fehler = [];
+  const protokoll = [];
+
+  /* 1. Karten: Maße 16 x 11, nur bekannte Kachelcodes */
+  const bekannteCodes = ['.', ',', 'f', 'b', 'c', 'p', 'o', '#', '~', 'x'];
+  BILDSCHIRME.forEach(function (b, i) {
+    if (b.karte.length !== CONFIG.FELD_HOEHE) {
+      fehler.push('Bildschirm ' + i + ': ' + b.karte.length + ' Zeilen statt 11');
+    }
+    b.karte.forEach(function (zeile, y) {
+      if (zeile.length !== CONFIG.FELD_BREITE) {
+        fehler.push('Bildschirm ' + i + ', Zeile ' + y + ': Länge ' + zeile.length + ' statt 16');
+      }
+      for (let x = 0; x < zeile.length; x++) {
+        if (bekannteCodes.indexOf(zeile[x]) < 0) {
+          fehler.push('Bildschirm ' + i + ', Zeile ' + y + ': unbekannter Code "' + zeile[x] + '"');
+        }
+      }
+    });
+  });
+  protokoll.push({ Pruefung: 'Kartenmaße und Kachelcodes', Ergebnis: 'ok' });
+
+  /* 2. Monster- und Gegenstandspunkte liegen auf begehbarem Boden */
+  GEBIETE.forEach(function (gb, gi) {
+    gb.monsterSpawns.forEach(function (s) {
+      const code = gb.karten[s.k][s.y][s.x];
+      if (BLOCKIERT[code]) {
+        fehler.push('Gebiet ' + gb.id + ': Spawn (' + s.x + '|' + s.y + ') blockiert ("' + code + '")');
+      }
+    });
+    if (gb.gegenstandPos) {
+      const p = gb.gegenstandPos;
+      const code = gb.karten[p.k][p.y][p.x];
+      if (BLOCKIERT[code]) {
+        fehler.push('Gebiet ' + gb.id + ': Gegenstandspunkt blockiert ("' + code + '")');
+      }
+    }
+    /* Startpunkt des Gebiets (Kachel 7|5) muss begehbar sein */
+    const start = gb.karten[0][5][7];
+    if (BLOCKIERT[start]) {
+      fehler.push('Gebiet ' + gb.id + ': Startpunkt blockiert ("' + start + '")');
+    }
+  });
+  protokoll.push({ Pruefung: 'Spawns, Gegenstände, Startpunkte', Ergebnis: 'ok' });
+
+  /* 3. Ausgänge: Zeilen 4-6 an den Rändern */
+  BILDSCHIRME.forEach(function (b, i) {
+    for (let y = 4; y <= 6; y++) {
+      /* Rechter Rand: offen, außer auf dem letzten Bildschirm (Burg) */
+      const rechts = b.karte[y][15];
+      const rechtsErwartet = (i + 1 < BILDSCHIRME.length);
+      if (rechtsErwartet && BLOCKIERT[rechts]) {
+        fehler.push('Bildschirm ' + i + ': rechter Ausgang Zeile ' + y + ' blockiert');
+      }
+      if (!rechtsErwartet && !BLOCKIERT[rechts]) {
+        fehler.push('Bildschirm ' + i + ': rechter Rand Zeile ' + y + ' offen, aber kein Nachbar');
+      }
+      /* Linker Rand: offen, außer auf dem allerersten Bildschirm */
+      const links = b.karte[y][0];
+      const linksErwartet = (i > 0);
+      if (linksErwartet && BLOCKIERT[links]) {
+        fehler.push('Bildschirm ' + i + ': linker Ausgang Zeile ' + y + ' blockiert');
+      }
+      if (!linksErwartet && !BLOCKIERT[links]) {
+        fehler.push('Bildschirm ' + i + ': linker Rand Zeile ' + y + ' offen, aber kein Nachbar');
+      }
+    }
+  });
+  /* Zaubertore: letzter Bildschirm jedes Gebiets, Spalte 14, Zeilen 4-6 */
+  GEBIETE.forEach(function (gb, gi) {
+    if (gb.boss) return;
+    const karte = gb.karten[gb.karten.length - 1];
+    for (let y = 4; y <= 6; y++) {
+      if (karte[y][14] !== 'x') {
+        fehler.push('Gebiet ' + gb.id + ': Zaubertor fehlt (Zeile ' + y + ')');
+      }
+    }
+  });
+  protokoll.push({ Pruefung: 'Ausgänge und Zaubertore', Ergebnis: 'ok' });
+
+  /* 4. Pixelschrift: jedes Zeichen 16 Hex-Zeichen */
+  let schriftOk = true;
+  Object.keys(SCHRIFT).forEach(function (zeichen) {
+    if (!/^[0-9a-fA-F]{16}$/.test(SCHRIFT[zeichen])) {
+      fehler.push('Schriftzeichen "' + zeichen + '": ungültige Glyphendaten');
+      schriftOk = false;
+    }
+  });
+  /* Wichtige Zeichen vorhanden (Abschnitt 4 und 8) */
+  'äöüß−|∧{}(),.·²'.split('').forEach(function (zeichen) {
+    if (!SCHRIFT[zeichen]) {
+      fehler.push('Schriftzeichen "' + zeichen + '" fehlt');
+      schriftOk = false;
+    }
+  });
+  /* Echtes Minus − (U+2212) muss sich deutlich vom Bindestrich - abheben */
+  const glyphPixel = function (zeichen) {
+    const hex = SCHRIFT[zeichen];
+    let n = 0;
+    for (let i = 0; i < hex.length; i += 2) {
+      const b = parseInt(hex.substr(i, 2), 16);
+      for (let bit = 0; bit < 8; bit++) if (b & (0x80 >> bit)) n++;
+    }
+    return n;
+  };
+  if (glyphPixel('−') <= glyphPixel('-') + 1) {
+    fehler.push('Minuszeichen − ist nicht deutlich breiter als der Bindestrich -');
+    schriftOk = false;
+  }
+  if (schriftOk) protokoll.push({ Pruefung: 'Pixelschrift', Ergebnis: 'ok' });
+
+  /* ---- 5. Referenzaufgaben aus Abschnitt 9.4 (mit dem Loeser) ---- */
+  const refA = {
+    name: '2y = −2x + 3 ∧ x = 4y',
+    sys: {
+      g1: glNormalform(bGanz(2), bGanz(2), bGanz(3), { typ: 'gemischt', x: 'R', y: 'L', c: 'R', ordnung: 'xy' }),
+      g2: glNormalform(bGanz(1), bGanz(-4), bGanz(0), { typ: 'aufg', vari: 'x', reihenfolge: 'xb' })
+    },
+    erwartet: 'L = {(1,2|0,3)}',
+    anzeige: ['2y = −2x + 3', 'x = 4y']
+  };
+  const refB = {
+    name: '2y − 8x = −14 ∧ 12x − 21 = 3y',
+    sys: {
+      g1: glNormalform(bGanz(-8), bGanz(2), bGanz(-14), { typ: 'gemischt', x: 'L', y: 'L', c: 'R', ordnung: 'yx' }),
+      g2: glNormalform(bGanz(12), bGanz(-3), bGanz(21), { typ: 'gemischt', x: 'L', y: 'R', c: 'L', ordnung: 'xy' })
+    },
+    erwartet: 'L = {(x|y) | y = 4x − 7}',
+    anzeige: ['2y − 8x = −14', '12x − 21 = 3y']
+  };
+  const refC = {
+    name: 'y + x = 8 ∧ 14x + 14y = 28',
+    sys: {
+      g1: glNormalform(bGanz(1), bGanz(1), bGanz(8), { typ: 'normal', ordnung: 'yx' }),
+      g2: glNormalform(bGanz(14), bGanz(14), bGanz(28), { typ: 'normal', ordnung: 'xy' })
+    },
+    erwartet: 'L = { }',
+    anzeige: ['y + x = 8', '14x + 14y = 28']
+  };
+  const refD = {
+    name: '(3x − 2)² = 9x² − 4y ∧ (y − 1)² + 2x = y · y',
+    sys: {
+      g1: glNormalform(bGanz(-12), bGanz(4), bGanz(-4), { typ: 'binomX', p: 3, q: -2, s: -4, t: 0 }),
+      g2: glNormalform(bGanz(2), bGanz(-2), bGanz(-1), { typ: 'binomY', q: -1, u: 2, v: 0 })
+    },
+    erwartet: 'L = {(0,75|1,25)}',
+    anzeige: ['(3x − 2)² = 9x² − 4y', '(y − 1)² + 2x = y · y']
+  };
+  [refA, refB, refC, refD].forEach(function (r) {
+    const l = loeseSystem(r.sys);
+    const a = loesungsmengeAnzeige(l);
+    if (a !== r.erwartet) fehler.push('Referenz „' + r.name + '": ' + a + ' statt ' + r.erwartet);
+    if (glAnzeige(r.sys.g1) !== r.anzeige[0]) {
+      fehler.push('Referenz „' + r.name + '": Anzeige „' + glAnzeige(r.sys.g1) + '" statt „' + r.anzeige[0] + '"');
+    }
+    if (glAnzeige(r.sys.g2) !== r.anzeige[1]) {
+      fehler.push('Referenz „' + r.name + '": Anzeige „' + glAnzeige(r.sys.g2) + '" statt „' + r.anzeige[1] + '"');
+    }
+    const weg = erzeugeWeg(r.sys, 'addition', l);
+    if (!weg || weg.length < 3) fehler.push('Referenz „' + r.name + '": leerer Lösungsweg');
+  });
+  protokoll.push({ Pruefung: 'Referenzaufgaben 9.4', Ergebnis: 'ok' });
+
+  /* ---- 6. je Verfahren und Niveau 200 generierte Aufgaben ---- */
+  VERFAHREN_LISTE.forEach(function (v) {
+    NIVEAUS.forEach(function (n) {
+      let ok = 0;
+      for (let i = 0; i < 200; i++) {
+        const auf = erzeugeAufgabe(v, n, 'auto');
+        let meldung = pruefeGenerierteAufgabe(auf, v, n);
+        /* Lösungsweg darf nirgends durch 0 teilen */
+        const vorher = BRUCH_NULLNENNER;
+        erzeugeWeg(auf.system, v, auf.loesung);
+        if (!meldung && BRUCH_NULLNENNER !== vorher) {
+          meldung = 'Lösungsweg teilt durch 0: ' + glAnzeige(auf.system.g1) + ' ∧ ' + glAnzeige(auf.system.g2);
+        }
+        if (meldung) fehler.push(v + '/' + n + ' Nr. ' + i + ': ' + meldung);
+        else ok++;
+      }
+      protokoll.push({ Pruefung: v + ' · ' + n + ' (200 Aufgaben)', Ergebnis: ok + ' von 200 ok' });
+    });
+  });
+  /* Stichproben: Lösungsweg je Verfahren und Sonderfall */
+  VERFAHREN_LISTE.forEach(function (v) {
+    ['eindeutig', 'keine', 'unendlich'].forEach(function (sf) {
+      for (let i = 0; i < 5; i++) {
+        const auf = erzeugeAufgabe(v, 'standard', sf);
+        const weg = erzeugeWeg(auf.system, v, auf.loesung);
+        if (!weg || weg.length < 3) fehler.push('Lösungsweg ' + v + '/' + sf + ' zu kurz');
+        for (let j = 0; j < weg.length; j++) {
+          if (weg[j].length > 30) fehler.push('Lösungsweg ' + v + '/' + sf + ': Zeile zu lang: ' + weg[j]);
+        }
+      }
+    });
+  });
+  protokoll.push({ Pruefung: 'Lösungswege (Stichproben)', Ergebnis: 'ok' });
+
+  /* ---- 7. Eingabe-Parser (Abschnitt 12) ---- */
+  const parserFaelle = [
+    ['0,75', [3, 4]], ['0.75', [3, 4]], ['3/4', [3, 4]], ['-3/4', [-3, 4]], ['−3/4', [-3, 4]],
+    [' 3 / 4 ', [3, 4]], ['2', [2, 1]], ['1,5', [3, 2]], ['0,3', [3, 10]], ['-2', [-2, 1]],
+    ['abc', null], ['1/0', null], ['1/2/3', null], ['', null], ['1,2,3', null],
+    ['--1', null], ['1..2', null], ['3/', null], ['/,5', null]
+  ];
+  let parserOk = 0;
+  parserFaelle.forEach(function (f) {
+    const erg = parseEingabe(f[0]);
+    if (f[1] === null) {
+      if (erg === null) parserOk++;
+      else fehler.push('Parser: „' + f[0] + '" sollte ungültig sein');
+    } else if (erg && erg.z === f[1][0] && erg.n === f[1][1]) parserOk++;
+    else fehler.push('Parser: „' + f[0] + '" ergab ' + (erg ? erg.z + '/' + erg.n : 'null'));
+  });
+  protokoll.push({ Pruefung: 'Eingabe-Parser', Ergebnis: parserOk + ' von ' + parserFaelle.length + ' ok' });
+
+  /* ---- 8. Formatierung und Bruch-Ausgabe (Abschnitt 8) ---- */
+  const fmtFaelle = [
+    [glNormalform(bGanz(1), bGanz(-1), bGanz(0)), 'x − y = 0'],
+    [glNormalform(bGanz(-1), bGanz(1), bGanz(-3)), '−x + y = −3'],
+    [glNormalform(bGanz(2), bGanz(0), bGanz(4)), '2x = 4'],
+    [glNormalform(bGanz(-2), bGanz(1), bGanz(0), { typ: 'aufg', vari: 'y', reihenfolge: 'xb' }), 'y = 2x'],
+    [glNormalform(bGanz(-1), bGanz(1), bGanz(3), { typ: 'aufg', vari: 'y', reihenfolge: 'xb' }), 'y = x + 3'],
+    [glNormalform(bGanz(0), bGanz(1), bGanz(4), { typ: 'aufg', vari: 'y', reihenfolge: 'xb' }), 'y = 4'],
+    [glNormalform(bGanz(-6), bGanz(2), bGanz(1), { typ: 'aufg', vari: 'y', reihenfolge: 'xb' }), 'y = 3x + 0,5']
+  ];
+  fmtFaelle.forEach(function (f) {
+    if (glAnzeige(f[0]) !== f[1]) {
+      fehler.push('Formatierung: „' + glAnzeige(f[0]) + '" statt „' + f[1] + '"');
+    }
+  });
+  if (bAnzeigen(new Bruch(3, 4)) !== '0,75') fehler.push('bAnzeigen(3/4) sollte 0,75 sein');
+  if (bAnzeigen(new Bruch(1, 3)) !== '1/3') fehler.push('bAnzeigen(1/3) sollte 1/3 sein');
+  if (bAnzeigen(new Bruch(-3, 4)) !== '−0,75') fehler.push('bAnzeigen(−3/4) sollte −0,75 sein');
+  if (bAnzeigen(bGanz(-12)) !== '−12') fehler.push('bAnzeigen(−12) sollte −12 sein');
+  protokoll.push({ Pruefung: 'Formatierung (Abschnitt 8)', Ergebnis: 'ok' });
+
+  /* ---- 9. Boss-Phasen (Abschnitt 9.2) ---- */
+  let phasenOk = true;
+  for (let i = 0; i < 20; i++) {
+    const p = erzeugeBossPhasen();
+    if (p.verfahren.slice().sort().join(',')
+        !== VERFAHREN_LISTE.slice().sort().join(',')) {
+      fehler.push('Boss-Phasen: nicht alle vier Verfahren gemischt');
+      phasenOk = false; break;
+    }
+    if (p.sf.filter(function (s) { return s !== 'eindeutig'; }).length < 1) {
+      fehler.push('Boss-Phasen ohne Sonderfall');
+      phasenOk = false; break;
+    }
+  }
+  if (phasenOk) protokoll.push({ Pruefung: 'Boss-Phasen (4 Verfahren, ≥1 Sonderfall)', Ergebnis: 'ok' });
+
+  /* ---- 10. Werkzeuge (Abschnitt 6) ---- */
+  let werkzeugFehler = 0;
+  ['gleichsetzen', 'einsetzen', 'addition'].forEach(function (v) {
+    for (let i = 0; i < 50; i++) {
+      const auf = erzeugeAufgabe(v, 'standard', 'auto');
+      const st = schwertText(auf, v);
+      if (!st || st.indexOf('L =') >= 0) {
+        fehler.push('Werkzeuge: schwertText ' + v + ' Nr. ' + i
+          + (st ? ': verrät die Lösung: ' + st : ': leer'));
+        werkzeugFehler++;
+      }
+      if (auf.loesung.typ === 'eindeutig') {
+        const bt = bumerangText(auf.system, auf.loesung.x, auf.loesung.y);
+        if (bt.split('stimmt ✓').length - 1 !== 2) {
+          fehler.push('Werkzeuge: bumerangText ' + v + ' Nr. ' + i + ': Probe nicht erfüllt');
+          werkzeugFehler++;
+        }
+      }
+    }
+  });
+  protokoll.push({ Pruefung: 'Werkzeuge (Schwert, Bumerang, 150 Aufgaben)', Ergebnis: werkzeugFehler === 0 ? 'ok' : werkzeugFehler + ' Fehler' });
+
+  /* Ergebnistabelle */
+  console.table(protokoll);
+  if (fehler.length === 0) {
+    console.log('Alle Tests bestanden (Karten, Spawns, Schrift, Referenzaufgaben, ' +
+      '2400 generierte Aufgaben, Lösungswege, Parser, Formatierung, Werkzeuge).');
+  } else {
+    console.error(fehler.length + ' Fehler:');
+    fehler.forEach(function (f) { console.error(' - ' + f); });
+  }
+  return fehler;
+}
+window.selbsttest = selbsttest;
+if (location.search.indexOf('test') >= 0) selbsttest();
+
+</script>
+</body>
+</html>
